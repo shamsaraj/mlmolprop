@@ -11,7 +11,7 @@ from rdkit.Chem import MACCSkeys
 from rdkit.Chem.Fingerprints import FingerprintMols
 import numpy as np
 import pandas as pd
-from modules.basic import log
+from basic import log
 
 #to disable RDkit warnings
 from rdkit import RDLogger 
@@ -98,26 +98,26 @@ def make_fingerprints(data,data_list, length = 256, path="", verbose=False, type
         fp.apply_fp(data)
     if condition==True:
         #print fp_list,11111111111111
-        #print fp_list[2].name,22222222222222
-        #print fp_list[2].fp_fun,3333333333333
-        #print fp_list[2].x,4444444444444444
-        #print fp_list[2].x[0],555555555555555
-        #print len(fp_list[2].x[0]), 66666666666
+        #print fp_list[2].name
+        #print fp_list[2].fp_fun
+        #print fp_list[2].x
+        #print fp_list[2].x[0]
+        #print len(fp_list[2].x[0])
         #info={}
         #fp3= GetMorganFingerprint(data[0], 3, bitInfo=info)
-        #print fp3,77777777777777
+        #print fp3
         #print len(fp3.GetNonzeroElements())
         #print dir(fp_list[2].x[0])
         #print dir(fp3)
-        #print fp3.ToBinary(),888888888888888
-        #print fp3.GetTotalVal(), 888888888888888
-        #print fp3.GetLength(), 888888888888888
+        #print fp3.ToBinary()
+        #print fp3.GetTotalVal()
+        #print fp3.GetLength()
         #test={847961216: ((2, 0), (18, 0))}
         #test2=fp3[0].ToBitString()
         #print test2
         #print info
-        df = pd.DataFrame(data=fp_list[0].x, index=data_list[0])## 0 is very important index here
-        #pd.DataFrame.to_csv(df, path+"fps.csv")  # , index=True)## commented out for array jobs  
+        df = pd.DataFrame(data=fp_list[0].x, index=data_list[0])# 0 is very important index here
+        #pd.DataFrame.to_csv(df, path+"fps.csv")  # , index=True)# commented out for array jobs  
     return [df, bit]# bit has to be changed to a list container for dictionaries
 
 def make_fingerprints2(data,data_list, length = 256, verbose=False,type_f="ECFP4"):
@@ -134,3 +134,4 @@ def make_fingerprints2(data,data_list, length = 256, verbose=False,type_f="ECFP4
     #df = pd.DataFrame(data=fp_list[0].x, index=data_list[0])##
     #pd.DataFrame.to_csv(df, path+"fps.csv")  # , index=True)## commented out for array jobs 
     return df
+
