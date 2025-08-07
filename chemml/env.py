@@ -1,8 +1,8 @@
 import os
 import sys
-#To solve DLL load failed when Python interpreter is not started from the command line
+#To solve DLL load failed when Python interpreter is not started from the command line, for PyCharm
 DEBUG=False
-from modules.basic import log
+from basic import log
 def env ():
     os.environ["PATH"] += r";D:\anaconda2\envs\py27"
     os.environ["PATH"] += r";D:\anaconda2\envs\py27\Library\mingw-w64\bin"
