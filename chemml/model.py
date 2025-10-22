@@ -82,13 +82,11 @@ clas = [RidgeClassifier, LogisticRegression, Perceptron, PassiveAggressiveClassi
         GaussianProcessClassifier, GaussianNB, ComplementNB, DecisionTreeClassifier, RandomForestClassifier, ExtraTreesClassifier,
         BaggingClassifier, GradientBoostingClassifier, AdaBoostClassifier, VotingClassifier, MLPClassifier]
 
-
-
-
 from sklearn.multioutput import MultiOutputClassifier
 
 from scipy import stats
 
+#Unsupervised clustering
 def clus_uns (x, y, path,xtest="", ytest="", rs=None, M="pca",n=2, v_names="", v1="",v2="", n2=2):
     # Clustering
     from sklearn.cluster import KMeans
@@ -145,8 +143,9 @@ def clus_uns (x, y, path,xtest="", ytest="", rs=None, M="pca",n=2, v_names="", v
         np.random.seed(1)
         centers = [[1, 1], [-1, -1], [1, -1]]
         X = x
-
-        pca = decomposition.PCA(n_components=3)###########
+        
+        # Specify number of the components
+        pca = decomposition.PCA(n_components=3)
         pca.fit(X)
         X = pca.transform(X)
 
@@ -180,26 +179,6 @@ def clus_uns (x, y, path,xtest="", ytest="", rs=None, M="pca",n=2, v_names="", v
 
 
         plt.cla()
-
-        #print len(X[:,1])
-        #print X[:, 0]
-        #for name, label in [('low', 0), ('high', 1)]:
-            #ax.text3D(X[y1 == label, 0].mean(),
-                    #X[y1 == label, 1].mean() + 1.5,
-                    #X[y1 == label, 2].mean(), name,
-                    #horizontalalignment='center',
-                    #bbox=dict(alpha=.5, edgecolor='w', facecolor='w'))
-        # Reorder the labels to have colors matching the cluster results
-
-
-
-        #y2= np.choose(y1, [1, 0]).astype(np.float)
-        #print y2
-
-       #print X[:, 0]
-
-        #plt.scatter(X[:, 0], X[:, 1], c=y1)
-        #plt.show()
 
         ax.scatter(X[:, 0], X[:, 1], X[:, 2], c=y1, cmap=matplotlib.colors.ListedColormap(colors2))#, cmap=plt.cm.nipy_spectral, edgecolor='k')
 
@@ -346,7 +325,8 @@ def clus_uns (x, y, path,xtest="", ytest="", rs=None, M="pca",n=2, v_names="", v
                 plt.show()  ######################
 
 def Model(x, y, xtest, ytest, v_names, c=10, M="mlr", rs=None, cv="loo"):
-
+    
+    #Variations of splits
     # from sklearn.model_selection import KFold
     # loo= KFold(n_splits=2)
     # from sklearn.model_selection import RepeatedKFold
@@ -363,6 +343,7 @@ def Model(x, y, xtest, ytest, v_names, c=10, M="mlr", rs=None, cv="loo"):
     # lpgo = LeavePGroupsOut(n_groups=2)
     # gss = GroupShuffleSplit(n_splits=4, test_size=0.5, random_state=0)
     # tscv = TimeSeriesSplit(n_splits=3)
+    
     ytests = []
     ypreds = []
     X_array = numpy.array(x)
@@ -461,7 +442,7 @@ def Model(x, y, xtest, ytest, v_names, c=10, M="mlr", rs=None, cv="loo"):
     r2 = model.score(x, y)
     R2test = r2test(ytest, y_predict_test, y)
     #Pearson = stats.pearsonr(ytest, y_predict_test)
-    Pearson =""###############################
+    Pearson =""
     q2f2= r2test(ytest, y_predict_test, ytest)
     model_mse_test = mean_squared_error(y_predict_test, ytest)
     math.sqrt(model_mse_test)
@@ -489,7 +470,6 @@ def Model(x, y, xtest, ytest, v_names, c=10, M="mlr", rs=None, cv="loo"):
         ms_error = metrics.mean_squared_error(ytests, ypreds)
         # print("R^2: {:.5f}%, MSE: {:.5f}".format(rr * 100, ms_error))
         q2 = q2r2(ytests, ypreds)
-        # print q2
         rmse = RMSEP_CV_C(ytests, ypreds)
         List = {"q2": q2, "RMSECV": rmse, "Q2F2": q2f2}
     if 1 == 2:
@@ -500,9 +480,6 @@ def Model(x, y, xtest, ytest, v_names, c=10, M="mlr", rs=None, cv="loo"):
         print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
 
     if M == "svm":
-        #VI = model.dual_coef_
-        #print "EROOOOOOOOOOOOOOR********************************88"
-        #pass
         sorted_VI =""
     elif M =="nn":
         VI = model.coefs_
@@ -543,7 +520,7 @@ def Model(x, y, xtest, ytest, v_names, c=10, M="mlr", rs=None, cv="loo"):
 
 
 #binary="binary"
-def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="loo", c2=10, c3="rbf", ep=300, dl2=[500,1000],lr1=0.01,nesterov=True,omp="adam",dp=0.2,bs=16, c4="adam", grid=False,weights='balanced'):
+def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="loo", c2=10, c3="rbf", c5=200, ep=300, dl2=[500,1000],lr1=0.01,nesterov=True,omp="adam",dp=0.2,bs=16, c4="adam", grid=False,weights='balanced'):
     # M2 should be on for MultiOutputClassifier
     # M2 should be equal to on2 to predict a new data set
     ytests = []
@@ -555,14 +532,12 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
         model = DecisionTreeClassifier(random_state=rs, max_depth=c1,max_features=c2)# ,max_leaf_nodes=6, min_samples_leaf=3)
         model2 = DecisionTreeClassifier(random_state=rs, max_depth=c1,max_features=c2)# ,max_leaf_nodes=6, min_samples_leaf=3)
     elif M == "nn":
-        #model = MLPClassifier(solver='adam', alpha=1e-5, hidden_layer_sizes=(20, 15, 12, 10, 5, 3,), random_state=rs, max_iter=280)
-        #model2 = MLPClassifier(solver='adam', alpha=1e-5, hidden_layer_sizes=(20, 15, 12, 10, 5, 3,), random_state=rs,max_iter=280)
-        #model = MLPClassifier(solver='adam', alpha=1e-4, hidden_layer_sizes=(c1,c1,c2,c2, ), random_state=rs,max_iter=250)
-        #model2 = MLPClassifier(solver='adam', alpha=1e-4, hidden_layer_sizes=(c1,c1,c2,c2, ), random_state=rs,max_iter=250)
-        #model = MLPClassifier(solver='adam', alpha=1e-4, hidden_layer_sizes=(100,100, ), random_state=rs,max_iter=200)
-        #model2 = MLPClassifier(solver='adam', alpha=1e-4, hidden_layer_sizes=(100,100, ), random_state=rs,max_iter=200)
-        model = MLPClassifier(solver=c4, alpha=0.0001, hidden_layer_sizes=(c1,c1,c1, ), random_state=rs,max_iter=c2)
-        model2 = MLPClassifier(solver=c4, alpha=0.0001, hidden_layer_sizes=(c1,c1,c1, ), random_state=rs,max_iter=c2)
+        #Solver: c4="adam"
+        #Layer_size: c1
+        #max_iter: c2
+        
+        model = MLPClassifier(solver=c4, alpha=0.0001, hidden_layer_sizes=(c1,c1,c1, ), random_state=rs,max_iter=c5)
+        model2 = MLPClassifier(solver=c4, alpha=1e-4, hidden_layer_sizes=(c1,c1,c1, ), random_state=rs,max_iter=c5)
     elif M == "rf":
         model = RandomForestClassifier( max_depth=c1, n_estimators=c1*2,random_state=rs,max_features="sqrt", max_leaf_nodes=None,class_weight=weights)
         model2 = RandomForestClassifier( max_depth=c1, n_estimators=c1*2,random_state=rs,max_features='sqrt', max_leaf_nodes=None,class_weight=weights)
@@ -572,18 +547,13 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
         model = ExtraTreesClassifier(max_depth=c1, random_state=rs)
         model2 = ExtraTreesClassifier(max_depth=c1, random_state=rs)
     elif M == "lsvm":
-        #c1=1
-        #model = LinearSVC(random_state=rs, max_iter=1000, C=c1)
-        #model2 = LinearSVC(random_state=rs, max_iter=1000, C=c1)
-        model = LinearSVC(class_weight="balanced", C=c1, random_state=rs)
-        model2 = LinearSVC(class_weight="balanced", C=c1, random_state=rs)
+        #default: max_iter=-1 
+        model = LinearSVC(class_weight=weights, C=c1, random_state=rs)
+        model2 = LinearSVC(class_weight=weights, C=c1, random_state=rs)
     elif M == "svm":
-        #model = SVC(random_state=rs, probability=True, C=c1, gamma=c2, kernel=c3, max_iter=-1 )
-        #model2 = SVC(random_state=rs, probability=True, C=c1, gamma=c2, kernel=c3, max_iter=-1)
-        #model = SVC(random_state=rs, probability=True, C=1, max_iter=-1 )
-        #model2 = SVC(random_state=rs, probability=True, C=1, max_iter=-1)
-        model = SVC(class_weight="balanced" ,random_state=rs, probability=True, C=c1, kernel=c3, max_iter=-1, gamma=c2 )
-        model2 = SVC(class_weight="balanced",random_state=rs, probability=True, C=c1, kernel=c3, max_iter=-1,gamma=c2)
+        #default: max_iter=-1 
+        model = SVC(class_weight=weights ,random_state=rs, probability=True, C=c1, kernel=c3, max_iter=c5, gamma=c2 )
+        model2 = SVC(class_weight=weights,random_state=rs, probability=True, C=c1, kernel=c3, max_iter=c5,gamma=c2)
     elif M == "lasso":
         #Classification metrics can't handle a mix of binary and continuous targets
         model = Lasso(alpha=0.1,random_state=rs)
@@ -743,7 +713,7 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
                     #print (n)
                     model2 = baseline_model()
 
-                    ######it seems that there is a critical problem with CV, early stopüping??
+                    ######it seems that there is a critical problem with CV, early stoping??
                     #model2.fit(X_train, y_train, batch_size=bs, epochs=ep, validation_data=[X_test,y_test], callbacks=[early_stopping_monitor],verbose=0,,class_weight=class_weights)
                     model2.fit(X_train, y_train, batch_size=bs, epochs=ep, validation_data=[X_test,y_test], verbose=0,class_weight=class_weights)
 
@@ -829,14 +799,15 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
             #LOO
             loo = LeaveOneOut()
         elif cv=="kf":
-            loo = KFold (n_splits=5, shuffle=True, random_state=rs)#################n_splits=5
+            loo = KFold (n_splits=5, shuffle=True, random_state=rs)
         elif cv=="kfr":
             loo = RepeatedKFold(n_splits=2, n_repeats=2, random_state=rs)
         elif cv=="shuff":
             loo= ShuffleSplit(n_splits=ni, test_size=0.2, random_state=0)
         n = 0
         for train_idx, test_idx in loo.split(x):
-            X_train, X_test = X_array[train_idx], X_array[test_idx]  # requires arrays
+            # requires arrays
+            X_train, X_test = X_array[train_idx], X_array[test_idx]  
             y_train, y_test = y_array[train_idx], y_array[test_idx]
             if M != 'dl':
                 model2.fit(X_train, y_train)
@@ -850,14 +821,12 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
             elif n!= 0:
                 ytests2 = ytests2 +[list(y_test)]
                 ypreds2 = ypreds2 + [list(y_pred)]
-            # there is only one y-test and y-pred per iteration over the loo.split,
+            # there is only one y-test and y-pred per iteration over the loo split,
             # so to get a proper graph, we append them to respective lists.
             if M!= "dl":
                 ytests += list(y_test)
                 ypreds += list(y_pred)
                 n = n + 1
-            #print ((ytests),88888888)
-            #print ((ypreds),99999999)
             accuracy_score_LOO = accuracy_score(ytests, ypreds, normalize=True)
         if cv=="shuff":
             accuracy_score_LOO_all=[None]*ni
@@ -880,7 +849,8 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
     if M2 != "on":
         if M == "tree":
             import os
-            os.environ["PATH"] += os.pathsep + 'D:/Program Files (x86)/Graphviz2.38/bin/'######################
+            # It is necessary to make the Graphviz works after the installation
+            os.environ["PATH"] += os.pathsep + 'D:/Program Files (x86)/Graphviz2.38/bin/'
             import graphviz
             from sklearn.tree import export_graphviz
 
@@ -892,22 +862,23 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
         elif (M=="rf") or (M=="ex") or (M=="lasso") or (M=="gb") or (M=="ada"):
             VI = model.feature_importances_
         elif (M == "svm"):
-            #VI = model.dual_coef_
-            VI = model.coef_[0]
+                if c3=="linear":
+                    #VI = model.dual_coef_
+                    VI = model.coef_[0]
+                else:
+                    VI=""
         elif M == "nn":
             VI = model.coefs_
-            #print VI , 5555555555555555555555555555555555
+            
             VI = numpy.dot(VI[0], VI[1])
         elif (M=="qua") or (M=="kn") or (M=="gu") or (M=="bg"):
             VI=""
-        elif M == "gunb" or M=='cnb':
+        elif M == "gunb":
             #neg_class_prob_sorted = model.feature_log_prob_[0, :].argsort()
             #pos_class_prob_sorted = model.feature_log_prob_[1, :].argsort()
-
             #print(numpy.take(count_vect.get_feature_names(), neg_class_prob_sorted[:10]))
             #print(numpy.take(count_vect.get_feature_names(), pos_class_prob_sorted[:10]))
             #VI = [neg_class_prob_sorted, pos_class_prob_sorted]
-
             #pred_proba = model.predict_proba(x)
             #words = numpy.take(count_vect.get_feature_names(), pred_proba.argmax(axis=1))
             #print (words)
@@ -922,8 +893,11 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
         if  (M=="qua") or (M=="kn") or (M=="gu")  or (M=="bg") or (M=="rn")or (M=="dl"):#(M== "svm") or
             sorted_VI= ""
             coef =""
-        elif (M=="gunb") or M=='cnb':
+        elif (M=="gunb"):
             sorted_VI = ""
+        elif M=="svm":
+            if c2!="linear":
+                sorted_VI = ""
         else:
             coef = VI.ravel()
             VI = pandas.DataFrame(data=VI, index=v_names)
@@ -932,7 +906,8 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
             sorted_coefficients = numpy.sort(coef)
             
             #result = {"R2": r2, "Mean_squared_error_test": model_mse_test, "R2_test": R2test, "F": f, "Variable Importance": sorted_VI}
-            #plot_w(sorted_v_names, sorted_coefficients)  #########################
+            # To plot the importances
+            #plot_w(sorted_v_names, sorted_coefficients)  
         if (M=="tree") or (M=="ld") or (M=="lr") or (M== "nn") or (M=="rf")   or (M=="lasso") or (M=="ex") or (M=="gb") or (M=="ada") or (M== "svm") or (M=="qua") or (M=="kn") or (M=="gu") or (M=="gunb") or (M=='cnb') or(M=="bg") or (M=="rn"):
             pra_train= model.predict_proba(x)
             pra_test = model.predict_proba(xtest)
@@ -948,18 +923,17 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
     else:
         sorted_VI =""
     if M2 != "on" and M2 != "on2":
+        # They are not correct
         cnf = confusion_matrix (y, y_predict_train)
         cnf3= confusion_matrix (ytests, ypreds)#CV
         cnf2 = confusion_matrix (ytest, y_predict_test)
-        #print (cnf)
-        #print (cnf3)
-        #print (cnf2)
-        ########33They nedd to get correrected
+        
     else:
         cnf =""
         cnf2=""
         cnf3=""
-    if "binary" == "binary":#########################3
+    # If the number of classes is two:
+    if "binary" == "binary":
         tp, fp, fn, tn = cnf.ravel()
         #print ("tn,fp,fn,tp", tn, fp, fn, tp)
         cnf[0][0]= tp
@@ -977,14 +951,7 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
         cnf3[0][1] = fnc
         cnf3[1][0] = fpc
 
-        #print ("Train")
-        #print (cnf)
-        #print ("CV")
-        #print (cnf3)
-        #print ("Test")
-        #print (cnf2)
-
-
+        
         # tp, fp, fn, tn = cnf.ravel()
         trainmetrics = metr(tp, tn, fp, fn)
         #print("train", trainmetrics)
@@ -1009,34 +976,23 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
         #plt.figure()
         #plot_confusion_matrix(cnf, classes="", normalize=True,  title='Normalized confusion matrix train')
 
-        #plt.show()  ######################
+        #plt.show()  
         plt.figure()
         plot_confusion_matrix(cnf3, classes=["Inactive","Active"], title="Cross-Validation")
         plt.ylabel("Predicted",fontsize="12",fontweight="bold")
         plt.xlabel("Actual",fontsize="12",fontweight="bold")
-        #plt.show()###################
+        #plt.show()
 
-        #plt.show()######################
+        #plt.show()
         plt.figure()
         plot_confusion_matrix(cnf2, classes=["Inactive","Active"], title="Test set")
         plt.ylabel("Predicted",fontsize="12",fontweight="bold")
         plt.xlabel("Actual",fontsize="12",fontweight="bold")
-        #plt.show()  ######################
+        #plt.show()  
 
-        if "VI"=="VI1111":#M!= "svm" and M!="gnub":
-            print (sorted_VI[-4:].index.tolist())
-            plt.bar(sorted_VI[-4:].index.tolist(), sorted_VI[-4:].iloc[:, 0], alpha=0.7)
-            plt.title("Variable Importance", fontsize=20)
-            plt.ylabel("Importance", fontsize=18)
-            plt.xlabel("Variable", fontsize=18)
-            plt.xticks([-1, 0, 1, 2, 3, 4])
-            # ax=plt()
-            plt.tick_params(
-                labelsize=13)  # ,labelrotation=90)#direction='out', length=6, width=2, colors='r',grid_color='r', grid_alpha=0.5)
-            plt.show()
-            # return [result, List]
+        
 
-        #rocc()
+    #rocc()
 
     y1=pandas.DataFrame(y,  index=x.index, columns=["observed"])
     y2=pandas.DataFrame(y_predict_train,  index=x.index, columns=["predicted"])

@@ -29,12 +29,8 @@ def data_prep(datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off
         #print column
     #print reader
     #dataset = numpy.loadtxt(reader, delimiter=",")
-    #print dataset
-    #print datafile, "ppppppppppppppppp"
+    
     df=pandas.read_csv(datafile, low_memory=False)
-
-
-    #print (df,2222)
 
 
     if imputation == "on": #noch hate problem
@@ -49,11 +45,11 @@ def data_prep(datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off
         #new updated
         from sklearn.impute import SimpleImputer
         #example
-	#imp = SimpleImputer(missing_values=np.nan, copy=False, strategy="mean", )
+	    #imp = SimpleImputer(missing_values=np.nan, copy=False, strategy="mean", )
 
 
-        #print df
-        df = df.dropna(axis=1, how='all')#It will drop columns with all NaN or NA
+        #It will drop columns with all NaN or NA
+        df = df.dropna(axis=1, how='all')
 
         df1=df.drop(NAME, axis=1)# to overcome impuation error on the names
         
@@ -94,26 +90,22 @@ def data_prep(datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off
         X = X[v_names2]
         if Xnormalized != "":
             X = Xnormalized.transform(X)
-            X = pandas.DataFrame(X, columns=v_names2)#index=?#############
+            X = pandas.DataFrame(X, columns=v_names2)#index=?
         if Xscaled != "":
             X = Xscaled.transform(X)
             X = pandas.DataFrame(X, columns=v_names2)
-        #print df1, "111111111111111111111111"
-        #print len (org_v_names), 444444444444
+        
         #print len(v_names2)
         #X = df1.drop (org_v_names, axis=1)
-        #print org_v_names , 9999999999999999999999
-        #print (X,1111)
-        
+                
         #X = X[org_v_names]
         
         X = X[v_names2]
         
         #print (ref_X_train, 'ref_X_train')
         #print( X, 'X')
-        #, org_v_names, ' org_v_names',ref_X_train.index, 'ref_X_train.index', X.index,'X.index')
-        
-       #CI_table2 = CI(ref_X_train, X, org_v_names, ref_X_train.index, X.index, cutoff=1.5)#####################################    ref_X should be defined
+        #ref_X should be defined
+        #CI_table2 = CI(ref_X_train, X, org_v_names, ref_X_train.index, X.index, cutoff=1.5)#####################################    
 
 
         #pandas.DataFrame.to_csv(CI_table2[0], "CI_train2.csv")
@@ -122,10 +114,10 @@ def data_prep(datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off
         #pandas.DataFrame.to_csv(CI_table2[2], "CI_Out_train2.csv")
         #pandas.DataFrame.to_csv(CI_table2[3], "CI_Out_exttest.csv")
         #print CI_table2
-        #print X, "2222222222222222222222222"
+        
         set = [X, y, org_v_names]
     else:
-        #print "iiiiiiiiiiiiiiii",df, "iiiiiiiiiiiiiiiii"
+        
         if REMOVE != "":
             #for i in REMOVE:
             #print i
@@ -137,9 +129,10 @@ def data_prep(datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off
         if selection != "":
             selection = [TARGET] + list (selection)
             df = df[selection]
-        #avr=average_bygroup(df, TARGET, "D:/pych/ml/average2.csv")###########
+        
         X = df.drop(TARGET, axis=1)
-        #X = X.loc[(X!= 0).any(1)]# to remove zero columns pandas
+        #to remove zero columns pandas
+        #X = X.loc[(X!= 0).any(1)]
         #to remove zero columns
         X = X.replace(0, np.nan)
         X = X.dropna(how="all", axis=1)
@@ -160,10 +153,10 @@ def data_prep(datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off
         index_names= df.index#loc[:, NAME]
         X = pandas.DataFrame(data=X)
         X=X.set_index(index_names)
-        #print X, 777777777777777
+        
         y = df[[TARGET]]
         y=y.set_index(index_names)
-        #print y ,6666666666666
+        
         if cat == "on":
             enc = preprocessing.OneHotEncoder(X,categorical_features=cat)
             X = enc
@@ -193,7 +186,7 @@ def data_prep(datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off
             X = pandas.DataFrame (X)
             X = X.drop (col_name, axis=1)
             v_names = list(X.columns.values)
-        y1 = y################
+        y1 = y
         if (FS == "clas") or (FS == "reg"):
 
             y = numpy.ravel(y)  # y = column_or_1d(y, warn=True)
@@ -201,11 +194,11 @@ def data_prep(datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off
                 #s1 = SelectKBest(chi2, k=ndes)
                 s1= SelectKBest(f_classif, k=ndes).fit(X,y)
                 p_values=s1.pvalues_
-                Bonferroni= p_values*len(v_names2)#############
+                Bonferroni= p_values*len(v_names2)
                 Bonferroni_d=pd.DataFrame(Bonferroni,index=v_names, columns=["p value"])
                 pandas.DataFrame.to_csv(Bonferroni_d,"Bonferroni.csv")
-                #result = pd.concat([Bonferroni_d, avr], axis=1, join_axes=[Bonferroni_d.index])###################
-                #pandas.DataFrame.to_csv(result, "Bonferroni2.csv")##################
+                #result = pd.concat([Bonferroni_d, avr], axis=1, join_axes=[Bonferroni_d.index])
+                #pandas.DataFrame.to_csv(result, "Bonferroni2.csv")
                 #F_values= s1.scores_
                 s2 = s1.fit_transform(X,y)
 
@@ -218,13 +211,13 @@ def data_prep(datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off
             X = pandas.DataFrame(s2, columns=v_names, index=index_names)
             #s=SelectKBest(FS,ndes).fit(X,y)
             #X=s.transform(X,y)
-            #print X,1111111111111111
+            
             v_names = list(X.columns.values)
             #print X, 3333333333333
             #X = pandas.DataFrame(data=X, columns=v_names, index=index_names)
             #X = pandas.DataFrame(data=X, index=index_names)
 
-        ###########################################################################################print v_names
+        ###########################################################################################
         dfout = pd.concat([y1, X], axis=1)
         dfout.to_csv("dfout.csv")
          #y = numpy.ravel(y)  # y = column_or_1d(y, warn=True)
@@ -246,15 +239,14 @@ def data_prep(datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off
             y_test = numpy.ravel(y_test)
         else:
             y = numpy.ravel(y)  # y = column_or_1d(y, warn=True)
-            #print X,55555555555555555555555555555
+            
             
             #mod="Class"
             if mod== "class":
                 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=ratio, random_state=rs, stratify=y)
             elif mod=="reg":
                 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=ratio, random_state=rs)
-            #print X_test, 6666666666
-            #print X_test.index, 88888888888
+            
         CI_table = CI (X_train, X_test, v_names, X_train.index,X_test.index,cutoff=3)
         #print CI_table [2]##################
         pandas.DataFrame.to_csv(CI_table[0], "CI_train.csv")
@@ -271,7 +263,7 @@ def data_prep(datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off
 
 
 #http://benalexkeen.com/linear-regression-in-python-using-scikit-learn/
-
+# more than two classes
 def multiC (datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off", cat = "", Cor = "off", ndes= 6, rs=None, newset="off", org_v_names="off", Xnormalized = "", Xscaled = "", v_names2="", NAME="name"):
     df=pandas.read_csv(datafile)
 
@@ -291,8 +283,9 @@ def multiC (datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off",
     #I= preprocessing.Imputer(missing_values="NaN", strategy="mean", axis=0, verbose=0, copy=True).fit(X)
     #X=I.transform(X)
     #X=pandas.DataFrame(X)
-    #X = VarianceThreshold_selector (X)###############################################################################
-    #print X
+    #
+    #X = VarianceThreshold_selector (X)
+    
     v_names = list(X.columns.values)
     v_names2 = v_names
     index_names= df.loc[:, NAME]
@@ -348,9 +341,9 @@ def multiC (datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off",
         X = pandas.DataFrame(X, columns=v_names, index=index_names)
         #s=SelectKBest(FS,ndes).fit(X,y)
         #X=s.transform(X,y)
-        #print X,1111111111111111
+        
         v_names = list(X.columns.values)
-        #print X, 3333333333333
+        
         #X = pandas.DataFrame(data=X, columns=v_names, index=index_names)
         #X = pandas.DataFrame(data=X, index=index_names)
 
@@ -374,12 +367,11 @@ def multiC (datafile, Scaled ="off", Normal = "off", FS = "off", Sparse = "off",
         y_test = numpy.ravel(y_test)
     else:
         #y = numpy.ravel(y)  # y = column_or_1d(y, warn=True)
-        #print X,55555555555555555555555555555
+        #
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=rs)
-        #print X_test, 6666666666
-        #print X_test.index, 88888888888
+        
     #CI_table = CI (X_train, X_test, v_names, X_train.index,X_test.index,1)
-    #print CI_table [2]##################
+   
     set = [X_train, y_train,X_test, y_test, v_names, Xnormalized, Xscaled, v_names2,X_train.index,X_test.index]
     return set
     pass

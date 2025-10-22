@@ -1,6 +1,8 @@
 import os
 import sys
 #To solve DLL load failed when Python interpreter is not started from the command line, for PyCharm
+# This is only for PyCharm
+
 DEBUG=False
 from basic import log
 def env ():

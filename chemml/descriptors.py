@@ -35,6 +35,7 @@ def desc(moleculesfile, type="molecule",delimiter=','):
             #print (i,'->',names[i])
         list = [names, nms, descrs]
         return list
+
 def dataframe(list, input_activities, output, TARGET="IC50", type1="file", type2="des"):
     if type1!="file":#A sdf should be provided instead
         SDFFile = type1
@@ -146,7 +147,8 @@ def CI(X_train, X_test, v_names, Mtrain_names,Mtest_names, cutoff):
     tables = [pandas.DataFrame(table_train, columns=v_names, index=Mtrain_names), pandas.DataFrame(table_test, columns=v_names, index=Mtest_names),pandas.DataFrame(out_train, columns=v_names, index=Mtrain_names), pandas.DataFrame(out_test, columns=v_names,index=Mtest_names)]
     return tables
 
-def finger(molecules_list, list1, type="fps"):#######deprecated
+#deprecated
+def finger(molecules_list, list1, type="fps"):
     import pandas
     from rdkit import DataStructs
     from rdkit.Chem import MACCSkeys
@@ -173,10 +175,10 @@ def finger(molecules_list, list1, type="fps"):#######deprecated
         #y=rdkit.DataStructs.cDataStructs.ExplicitBitVect(fps[0])
         #y= rdkit.DataStructs.cDataStructs.IntSparseIntVect (fps[0])
         #y = fps[0].ToBitString()
-        print (55)
+        
         #y= list(fps)
         #print y
-        print (66)
+        
         #print y
     elif type == "fcfp":
         #Feature-based invariants, similar to those used for the FCFP fingerprints, can also be used.

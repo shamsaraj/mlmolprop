@@ -11,8 +11,8 @@ from rdkit.Chem import AllChem
 from rdkit.Chem import Draw
 from rdkit.Chem.SaltRemover import SaltRemover
 #from rdkit.Chem.Draw import IPythonConsole
-from IPython.display import SVG###################################it could not be imported in kolblab env
-##################################################33
+from IPython.display import SVG
+##################################################
 from rdkit.Chem import rdDepictor
 from rdkit.Chem.Draw import rdMolDraw2D
 #import cairosvg
@@ -37,36 +37,33 @@ def moltosvg(mol,molSize=(450,150),kekulize=True):
     drawer.DrawMolecule(mc)
     drawer.FinishDrawing()
     svg = drawer.GetDrawingText()
-    # It seems that the svg renderer used doesn't quite hit the spec.
-    # Here are some fixes to make it work in the notebook, although I think
-    # the underlying issue needs to be resolved at the generation step
     return svg.replace('svg:','')
+
 def mol_prep (moleculefile):
     try:
-        #print (1)
         m1 = moleculefile
         #print (m1.GetProp("_Name"), "to 3d")
-        #print m1
+        
         #try:
         #print m1.GetNumAtoms()
         #remover = SaltRemover(defnData="[Cl,Br]")
-        #print (2)
-        remover = SaltRemover()###################################
+        
+        remover = SaltRemover()
         #print len(remover.salts)
-        #print (3)
-        res = remover.StripMol(m1)##########################
+        
+        res = remover.StripMol(m1)
         #res is not None
         #print res.GetNumAtoms()
-        #print (4)
-        m2 = rdkit.Chem.AddHs(res)#########################################
-        #m2=m1##########################################
+        
+        m2 = rdkit.Chem.AddHs(res)#
+        
         #print (rdkit.Chem.MolToMolBlock(m2))
-        #print (5)
+        
         AllChem.Compute2DCoords(m2)####
-        #print (6)
+        
         rdPartialCharges.ComputeGasteigerCharges(m2)
         #print float(m2.GetAtomWithIdx(0).GetProp('_GasteigerCharge'))
-        #print (7)
+        
         AllChem.EmbedMolecule(m2)
         try:
             AllChem.UFFOptimizeMolecule(m2)
@@ -74,20 +71,20 @@ def mol_prep (moleculefile):
             pass
         #AllChem.EmbedMolecule(m2, AllChem.ETKDG())
         #AllChem.MMFFOptimizeMolecule(m2)
-        #print (8)
+        
         m3 = rdkit.Chem.RemoveHs(m2)
         #except:
             #print ("AllChem.UFFOptimizeMolecule(m2) ValueError: Bad Conformer Id")
-            #m3 = m2
+            
     except:
         
         m2 = rdkit.Chem.MolFromSmiles("c1ccccc1") 
         m2.SetProp("_Name","dummy")
-        m2 = rdkit.Chem.AddHs(res)#########################################
-        AllChem.Compute2DCoords(m2)####
+        m2 = rdkit.Chem.AddHs(res)
+        AllChem.Compute2DCoords(m2)
         rdPartialCharges.ComputeGasteigerCharges(m2)
         #print float(m2.GetAtomWithIdx(0).GetProp('_GasteigerCharge'))
-        #print (7)
+        
         AllChem.EmbedMolecule(m2)
         m3 = rdkit.Chem.RemoveHs(m2)
         print ("error in molprop type 8")
@@ -138,7 +135,7 @@ def mol_enumerate (moleculesfile,output1, output2, format="sdf",moleculefiles2="
     #RDimage(input_molecules)
     for mol in input_molecules:
         #print (mol)
-        #print (i , mol.GetProp("_Name"), "to 3d")################
+        #print (i , mol.GetProp("_Name"), "to 3d")
         if i%print_int==0 or i == 0:
             print (i , mol.GetProp("_Name"), "to 3d")
         preparedmolecule=mol_prep(mol)
@@ -151,11 +148,11 @@ def mol_enumerate (moleculesfile,output1, output2, format="sdf",moleculefiles2="
     w1.close()
     w2.close()
     if image == True:
-        RDimage(input_molecules_list,imagepath)####################################################################################################
+        RDimage(input_molecules_list,imagepath)
     return input_molecules_list
 
 def RDimage (ms,dir):
-    #rdkit.Chem.SmilesWriter(ms, "D:/pych/ml/dr3/newtest.txt")
+    
     from rdkit.Chem import rdDepictor
     #Draw.MolDrawing.dotsPerAngstrom = 60
     #Draw.MolDrawing.atomLabelFontSize = 12
@@ -181,7 +178,7 @@ def RDimage (ms,dir):
         #Draw.MolToFile(m, dir + m.GetProp("_Name") + ".png")
         #Draw.MolToImage(m)
         rdDepictor.Compute2DCoords(m)
-        drawer = rdMolDraw2D.MolDraw2DSVG(300, 150)#########################
+        drawer = rdMolDraw2D.MolDraw2DSVG(300, 150)
         #drawer.SetFontSize(0.8)
         drawer.DrawMolecule(m)
         drawer.FinishDrawing()
@@ -202,68 +199,18 @@ def RDimage (ms,dir):
 
 
         #SVG(moltosvg(mol))
-        #cairosvg.svg2png(svg, write_to=dir + m.GetProp("_Name") + '.png') ##Compatible with python 2.7
+        #Compatible with python 2.7
+        #cairosvg.svg2png(svg, write_to=dir + m.GetProp("_Name") + '.png')
         #os.remove()
 
         #cairosvg.svg2pdf(svg, write_to=dir + m.GetProp("_Name") + '.pdf')
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#Scratch
-
-#mol = rdkit.Chem.MolFromSmiles("CN1CCN(S(=O)(C2=CC=C(OCC)C(C3=NC4=C(N(C)N=C4CCC)C(N3)=O)=C2)=O)CC1")
-
-#rdkit.Chem.MolToSmiles()
-#rdkit.Chem.SmilesWriter(ms,"test.txt")
-#highlight examples:
-#drawer.DrawMolecule(m,highlightAtoms=m.GetSubstructMatch(Chem.MolFromSmarts('c1ncoc1')))
-
-#highlight=list(m.GetSubstructMatch(Chem.MolFromSmarts('c1ncoc1'))) + [10,1]
-
-#highlight=[10,1,4,13]
-#colors={1:(1,0,0), 4:(0,1,0), 13:(0,0,1), 10:(1,0,1)}
-#drawer.DrawMolecule(m,highlightAtoms=highlight,highlightAtomColors=colors)
-
-
-#eg
-#Draw.MolToFile( mol, fname+"png" )
-#Draw.MolToFile( mol, "temp.svg" )
-#cairosvg.svg2png( url='./temp.svg', write_to= "svg_"+
-
-def mol_enumerate_old (moleculesfile): ####should be updated according to the smiles def #deprecated
+####should be updated according to the smiles def #deprecated
+def mol_enumerate_old (moleculesfile): 
     input_molecules = rdkit.Chem.SDMolSupplier(moleculesfile)
     number_input_molecules= 0
     for mol in input_molecules:
-        mol_prep(mol)######
+        mol_prep(mol)
         number_input_molecules= number_input_molecules +1
     input_molecules_list = number_input_molecules * ["null"]
     i = 0

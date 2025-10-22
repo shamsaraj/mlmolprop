@@ -97,28 +97,9 @@ def make_fingerprints(data,data_list, length = 256, path="", verbose=False, type
         if (verbose): print("doing", fp.name)
         fp.apply_fp(data)
     if condition==True:
-        #print fp_list,11111111111111
-        #print fp_list[2].name
-        #print fp_list[2].fp_fun
-        #print fp_list[2].x
-        #print fp_list[2].x[0]
-        #print len(fp_list[2].x[0])
-        #info={}
-        #fp3= GetMorganFingerprint(data[0], 3, bitInfo=info)
-        #print fp3
-        #print len(fp3.GetNonzeroElements())
-        #print dir(fp_list[2].x[0])
-        #print dir(fp3)
-        #print fp3.ToBinary()
-        #print fp3.GetTotalVal()
-        #print fp3.GetLength()
-        #test={847961216: ((2, 0), (18, 0))}
-        #test2=fp3[0].ToBitString()
-        #print test2
-        #print info
         df = pd.DataFrame(data=fp_list[0].x, index=data_list[0])# 0 is very important index here
-        #pd.DataFrame.to_csv(df, path+"fps.csv")  # , index=True)# commented out for array jobs  
-    return [df, bit]# bit has to be changed to a list container for dictionaries
+    # bit has to be changed to a list container for dictionaries    
+    return [df, bit]
 
 def make_fingerprints2(data,data_list, length = 256, verbose=False,type_f="ECFP4"):
     if type_f== "ECFP4":

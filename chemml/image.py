@@ -48,7 +48,9 @@ def image(path,ext,output):
 #plt.imshow(imgs3, cmap=plt.cm.gray)
 #plt.show(block=True)#to show the plot in pycharm
 
-def transform_f (images,labels):#https://www.programcreek.com/python/example/96394/skimage.transform.rotate
+
+#https://www.programcreek.com/python/example/96394/skimage.transform.rotate
+def transform_f (images,labels):
     img = images
     label = labels
     print (img,11111111111111)
@@ -56,7 +58,7 @@ def transform_f (images,labels):#https://www.programcreek.com/python/example/963
     print (img[0] ,22222222222222)
 
     plt.imshow(img, cmap=plt.cm.gray)
-    plt.show(block=True)#to show the plot in pycharm#g=transform_f(imagesallarray,imagesname)result=[img,label]
+    plt.show(block=True)#to show the plot in pycharm #g=transform_f(imagesallarray,imagesname)result=[img,label]
 
     # Rotate
     img = transform.rotate(img, angle=np.random.uniform(-45, 45),

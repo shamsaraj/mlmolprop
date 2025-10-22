@@ -24,10 +24,6 @@ def lime2(model, x, feature_names, y, type1="regression", n=8, i=0, graph=False)
             #print x.iloc[i,]
             exp = explainer.explain_instance(tr[i], model.predict_proba, num_features=n)
             
-            
-            # print exp
-            #print (dir(exp))
-
             print ("exp.predict_proba",exp.predict_proba)
 
             #print "exp.local_exp",exp.local_exp
@@ -44,12 +40,9 @@ def lime2(model, x, feature_names, y, type1="regression", n=8, i=0, graph=False)
             #print x.iloc[i,]
             exp = explainer.explain_instance(tr[i], model.predict, num_features=n)
             #exp.show_in_notebook(show_table=True)
-            # print exp
-            #print (dir(exp))
-
+            
             print ("exp.predicted_value",exp.predicted_value)
             
-
             #print "exp.local_exp",exp.local_exp
             print ("y[i]",y[i])
             print ("exp.score",exp.score)
@@ -80,9 +73,6 @@ def main(model, x, feature_names, type1="reg"):
         pyint_model = InMemoryModel(model.predict, examples=x)
     plot = interpreter.feature_importance.plot_feature_importance(pyint_model)
     # plot.show()
-
-
-# main(model[2],set1[0],set1[4])
 
 # treeinterpreter
 def tree(model, x, feature_name ,y):
@@ -122,31 +112,9 @@ def tree(model, x, feature_name ,y):
             list4[k] = np.mean(list3[j][k][1])
             #list5[k]=[fe_name[k],list4[k]]
         list6=sorted(zip(list4,fe_name),key=lambda x: -abs(x[0]))
-    #print list3[0][0][1]
-    #print list3[1][0][1]
-    #print list5
-    #print list6 #Global interpretability
-
-    #print df
+    
     result =[x.index.tolist()[i],list1,df,list6]
     return result
-
-
-
-
-
-# print set1[0].index
-# np.transpose(impact)
-# df5=pd.DataFrame (impact,index=set1[0].index)
-# print impact, "impact"
-# print len (impact)
-# print len (impact [0])
-# print len (impact[1])
-# print len (impact[2])
-# impact2=impact.loc[:set1[4]]
-# impact3=impact2.loc[:model[0]["Variable Importance"][0]]
-# print "accuracy_score_LOO=",model[0]["accuracy_score_LOO"],"accuracy_score_train=",model[0]["accuracy_score_train"],"accuracy_score_test=",model[0]["accuracy_score_test"]
-# print "mean", mean(model[0]["R2_test"]), mean(model[1]["q2"]), mean(model[0]["R2"]), mean(model[0]["Pearson"][0]), mean(model[0]["Q2F2"]), mean(model[0]["R2"]- model[1]["q2"]),"********************"
 
 
 # partial
@@ -154,12 +122,12 @@ def partial(x, y, VI, n=4,type="reg"):
     from sklearn.ensemble import GradientBoostingRegressor
     from sklearn.ensemble import GradientBoostingClassifier
     from sklearn.ensemble.partial_dependence import partial_dependence, plot_partial_dependence
-    import matplotlib.pyplot as plt  ################3
+    import matplotlib.pyplot as plt  
     VI2 = VI.sort_values(by=[0], ascending=False)
     nn = VI2.index
     nn = pd.Index.tolist(nn)
     tr_y = np.array(y)
-    tr = np.array(x[nn])  ##########
+    tr = np.array(x[nn])  
     if type == "reg":
         gb = GradientBoostingRegressor(n_estimators=10).fit(tr, tr_y)
     elif type == "class":
@@ -174,34 +142,22 @@ def partial(x, y, VI, n=4,type="reg"):
     plt.tight_layout()
     plt.show()
     # plt.interactive(False)
-    # print fig,9999999
     # raw_input("pause")
 
 
 def clas_graph(x,y,feathres_name,fe=[0,1]):
-    #iris = datasets.load_iris()
-    #X = iris.data[:, :2]  # we only take the first two features. We could
-    #print X                      # avoid this ugly slicing by using a two-dim dataset
-    #y = iris.target
-    #print set[4]
-    #print set[0]
-
+    
     fe=[feathres_name[feathres_name.index('Do you have a job stress?')],feathres_name[feathres_name.index('1-methyl-4-(1-methylethyl) benzene')]]
-    #print fe
+    
     X = x[fe]
     X = np.array(X)
 
+    # step size in the mesh
+    h = .02  
 
-    #X2=np.array(set[0])
-    #X2 = X[:, :2]
-    #print X
-
-
-    h = .02  # step size in the mesh
-
-    # we create an instance of SVM and fit out data. We do not scale our
-    # data since we want to plot the support vectors
-    C = 1.0  # SVM regularization parameter
+    # we create an instance of SVM and fit out data. We do not scale our data since we want to plot the support vectors
+    # SVM regularization parameter
+    C = 1.0  
 
     svc = svm.SVC(kernel='linear', C=C).fit(X, y)
     rbf_svc = svm.SVC(kernel='rbf', gamma=0.7, C=C).fit(X, y)
