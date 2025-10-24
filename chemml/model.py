@@ -1,5 +1,5 @@
 #coding=utf-8
-from modules.basic import q2r2, RMSEP_CV_C, r2test, F
+from .basic import q2r2, RMSEP_CV_C, r2test, F
 from sklearn.datasets import make_regression
 from sklearn.metrics import mean_squared_error
 import math
@@ -16,7 +16,7 @@ import matplotlib
 from sklearn.metrics import confusion_matrix
 import pandas
 
-from modules.basic import analyse
+from .basic import analyse
 #############regressors
 from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import Ridge
@@ -564,8 +564,8 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
         c2="liblinear"
         #model = LogisticRegression(random_state=rs, max_iter=c1, solver=c2)
         #model2 = LogisticRegression(random_state=rs, max_iter=c1, solver=c2)
-        model = LogisticRegression(max_iter=c1,random_state=rs)
-        model2 = LogisticRegression(max_iter=c1,random_state=rs)
+        model = LogisticRegression(max_iter=c1,random_state=rs,class_weight=weights)
+        model2 = LogisticRegression(max_iter=c1,random_state=rs,class_weight=weights)
     elif M == "ld":
         model = LinearDiscriminantAnalysis()
         model2 = LinearDiscriminantAnalysis()
@@ -604,9 +604,9 @@ def ModelC(x, y, xtest, ytest, v_names, c1=10, M="tree", rs=None, M2="off", cv="
         model = GaussianNB()
         model2 = GaussianNB()
     elif M == "cnb":
-        #
-        model = ComplementNB()
-        model2 = ComplementNB()
+        #alpha=1
+        model = ComplementNB( alpha=c1)
+        model2 = ComplementNB(alpha=c1)
     elif M == "bg":
         #
         model = BaggingClassifier(random_state=rs)

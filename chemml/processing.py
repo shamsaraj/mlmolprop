@@ -1,13 +1,13 @@
 import csv
 import numpy
 import pandas
-from modules.basic import *
+from .basic import *
 import pickle
 #import cPickle
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
 from sklearn.feature_selection import VarianceThreshold
-from modules.correlation import *
+from .correlation import *
 #http://benalexkeen.com/linear-regression-in-python-using-scikit-learn/
 from sklearn.feature_selection import SelectKBest
 from sklearn.feature_selection import f_regression ,chi2, f_classif

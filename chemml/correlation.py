@@ -1,7 +1,7 @@
 
 import pandas as pd
 import numpy as np
-from modules.basic import log
+from .basic import log
 DEBUG=False
 
 def find_correlation(data, threshold=0.9):

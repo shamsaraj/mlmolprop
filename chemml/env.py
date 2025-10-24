@@ -4,7 +4,7 @@ import sys
 # This is only for PyCharm
 
 DEBUG=False
-from basic import log
+from .basic import log
 def env ():
     os.environ["PATH"] += r";D:\anaconda2\envs\py27"
     os.environ["PATH"] += r";D:\anaconda2\envs\py27\Library\mingw-w64\bin"

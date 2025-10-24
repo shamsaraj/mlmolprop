@@ -11,7 +11,7 @@ from rdkit.Chem import MACCSkeys
 from rdkit.Chem.Fingerprints import FingerprintMols
 import numpy as np
 import pandas as pd
-from basic import log
+from .basic import log
 
 #to disable RDkit warnings
 from rdkit import RDLogger 
@@ -49,7 +49,7 @@ class fingerprint():
             #if (str(type(self.x[0])) != "<class 'numpy.ndarray'>"):
                 #print("WARNING: type for ", self.name, "is ", type(self.x[0]))
 
-def make_fingerprints(data,data_list, length = 256, path="", verbose=False, type_f="ECFP4"):
+def make_fingerprints(data,data_list, length = 256, path="", verbose=False, type_f="ECFP4", radius=2):
     
     
     if type_f=="all":
@@ -80,7 +80,7 @@ def make_fingerprints(data,data_list, length = 256, path="", verbose=False, type
     elif type_f == "ECFP4":
         try:
             RDLogger.DisableLog('rdApp.*') 
-            fp_list=[fingerprint(lambda x :  GetMorganFingerprintAsBitVect(x, radius=2, nBits = length, useFeatures=False, bitInfo=bit), "Morgan circular ECFP")]
+            fp_list=[fingerprint(lambda x :  GetMorganFingerprintAsBitVect(x, radius=radius, nBits = length, useFeatures=False, bitInfo=bit), "Morgan circular ECFP")]
 
         except:
             print ("error in fingerprnt module")

@@ -2,7 +2,7 @@ from multiprocessing import freeze_support
 import numpy as np
 import pandas as pd
 #import winsound
-from modules.basic import *
+from .basic import *
 from sklearn.ensemble import RandomForestClassifier  # Forests of randomized trees
 from sklearn.neural_network import MLPClassifier
 from sklearn import svm#, datasets

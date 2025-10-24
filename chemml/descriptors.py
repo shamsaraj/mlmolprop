@@ -1,7 +1,7 @@
 import rdkit.ML.Descriptors
 from rdkit.ML.Descriptors import MoleculeDescriptors
-from modules.basic import twodlist
-from modules.basic import makecolumn
+from .basic import twodlist
+from .basic import makecolumn
 import rdkit.Chem
 from rdkit import Chem
 from rdkit.Chem import Descriptors
@@ -11,10 +11,39 @@ from rdkit.Chem import AllChem
 from rdkit.Chem import SDMolSupplier
 from rdkit.Chem.AllChem import  GetMorganFingerprintAsBitVect, GetErGFingerprint
 import pandas as pd
-from modules.basic import log
+from .basic import log
 DEBUG=False
 
-def desc(moleculesfile, type="molecule",delimiter=','):
+
+positive_prefixes = [
+    "fr_",          # fragment counts (~110 descriptors)
+    "Num",          # counts: NumAtoms, NumRings, etc.
+    "MolWt", "ExactMolWt", "HeavyAtomMolWt",
+    "TPSA", "LabuteASA", "SPS", "qed",
+    "PEOE_VSA", "SMR_VSA", "SlogP_VSA"  # surface area families
+]
+#Filter RDKit’s full list to only those
+positive_desc_names = [
+    name for name, func in Descriptors.descList
+    if any(name.startswith(prefix) for prefix in positive_prefixes)
+]
+
+easy_prefixes = [
+    "fr_",          # fragment counts (~110 descriptors)
+    "Num",          # counts: NumAtoms, NumRings, etc.
+    "MolWt", "ExactMolWt", "HeavyAtomMolWt",
+    "TPSA"
+]
+#Filter RDKit’s full list to only those
+easy_desc_names = [
+    name for name, func in Descriptors.descList
+    if any(name.startswith(prefix) for prefix in easy_prefixes)
+]
+
+
+
+
+def desc(moleculesfile, type="molecule",delimiter=',',selected_des="all"):
     if type == "sdf":
         molecules_list = rdkit.Chem.SDMolSupplier(moleculesfile)
     elif type == "smi":
@@ -23,7 +52,14 @@ def desc(moleculesfile, type="molecule",delimiter=','):
         molecules_list = moleculesfile
     if type == type :
         temp = rdkit.Chem.Descriptors
-        nms = [x[0] for x in Descriptors._descList]
+        if selected_des == "all":
+            nms = [x[0] for x in Descriptors._descList]
+            
+        elif selected_des== "positive":
+            nms = positive_desc_names
+        elif selected_des== "interpretable":
+            nms = easy_desc_names
+            
         names = len(molecules_list) * ["null"]
         descrs = len(molecules_list) * ["null"]
         # nms.remove('MolecularFormula')
@@ -40,7 +76,7 @@ def dataframe(list, input_activities, output, TARGET="IC50", type1="file", type2
     if type1!="file":#A sdf should be provided instead
         SDFFile = type1
         sdftable = rdkit.Chem.PandasTools.LoadSDF(SDFFile)
-        print (sdftable.head(),222)
+        
         df = sdftable.loc[:, ["ID", TARGET]]
         #df = df.iloc[:, [1,2]]
         df.rename(columns={"ID": "name"},inplace=True)

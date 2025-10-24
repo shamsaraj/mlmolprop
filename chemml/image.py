@@ -101,7 +101,7 @@ def transform_f (images,labels):
     return result
 
 def highlight():
-    from env import env
+    from .env import env
     env()
     import rdkit.Chem
     from rdkit.Chem import rdDepictor

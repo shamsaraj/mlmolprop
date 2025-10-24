@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-from modules.model import rocc
+from .model import rocc
 
 def myplot(df,y,type,n=8,df2="",y2="",y3="",output="plot.jpg"):
     SMALL_SIZE = 8

@@ -2,7 +2,7 @@
 #conda install -c conda-forge cairo
 #pip install ipython
 
-from modules.env import *
+from .env import *
 env4()
 
 import rdkit.Chem
@@ -30,6 +30,7 @@ def moltosvg(mol,molSize=(450,150),kekulize=True):
         try:
             rdkit.Chem.Kekulize(mc)
         except:
+            print ("can not be kekulized")
             mc = rdkit.Chem.Mol(mol.ToBinary())
     if not mc.GetNumConformers():
         rdDepictor.Compute2DCoords(mc)
@@ -78,6 +79,7 @@ def mol_prep (moleculefile):
             
     except:
         
+        print ("smiles cannot be processed")
         m2 = rdkit.Chem.MolFromSmiles("c1ccccc1") 
         m2.SetProp("_Name","dummy")
         m2 = rdkit.Chem.AddHs(res)
@@ -101,7 +103,7 @@ def mol_enumerate (moleculesfile,output1, output2, format="sdf",moleculefiles2="
                 else:
                     mol1 = rdkit.Chem.MolFromSmiles("c1ccccc1")
                     mol1.SetProp("_Name","dummy")
-                    print ("error in molprop type 9")
+                    print ("Molecule number:"+str(n)+" error in molprop")
                 input_molecules.append(mol1)
         if moleculefiles2 != "":
             input_molecules2 = rdkit.Chem.SDMolSupplier(moleculefiles2)
@@ -118,7 +120,7 @@ def mol_enumerate (moleculesfile,output1, output2, format="sdf",moleculefiles2="
                 else:
                     mol1 = rdkit.Chem.MolFromSmiles("c1ccccc1")
                     mol1.SetProp("_Name","dummy")
-                    print ("Molecule number:"+str(n)+" error in molprop type 9")
+                    print ("Molecule number:"+str(n)+" error in molprop")
                 input_molecules.append(mol1)
                 n=n+1
         if moleculefiles2 != "":
