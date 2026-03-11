@@ -1,4 +1,4 @@
-# 🧪 Chem_ML — Cheminformatics & QSAR Modeling Toolkit
+# Chem_ML — Cheminformatics & QSAR Modeling Toolkit
 
 **Chem_ML** is a modular Python framework for cheminformatics and QSAR (Quantitative Structure–Activity Relationship) modeling.  
 It enables molecular descriptor generation, fingerprint computation, dataset preprocessing, feature selection, and machine learning analysis — all within one workflow.
@@ -7,7 +7,7 @@ This toolkit integrates **RDKit**, **Scikit-learn**, **LIME**, and **matplotlib*
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 | File | Description |
 |------|--------------|
@@ -40,7 +40,7 @@ pip install rdkit scikit-learn matplotlib numpy pandas lime keras svglib
 
 ---
 
-## 🚀 Usage Overview
+## Usage Overview
 
 ### 1️⃣ Prepare Molecules
 ```python
@@ -70,7 +70,7 @@ print(result[0])  # model summary and metrics
 
 ---
 
-## 📊 Features
+## Features
 
 ✅ Molecular structure preparation (SMILES/SDF)  
 ✅ Descriptor and fingerprint generation (ECFP, MACCS, Avalon, etc.)  
@@ -82,7 +82,7 @@ print(result[0])  # model summary and metrics
 
 ---
 
-## 📘 Example Workflow
+## Example Workflow
 
 1. Prepare molecules  
 2. Generate descriptors  
@@ -92,7 +92,7 @@ print(result[0])  # model summary and metrics
 
 ---
 
-## 🧑‍💻 Author
+## Author
 
 **J. Shamsara**  
 🔗 [GitHub Profile](https://github.com/shamsaraj)
