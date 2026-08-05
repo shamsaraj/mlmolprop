@@ -185,7 +185,6 @@ def RDimage (ms,dir):
         name=dir + m.GetProp("_Name") + ".svg"
         with open(name, 'w') as f:
             f.write(svg)#to write svg file on disk
-        log("test,",DEBUG)
         SVG(svg)
         from svglib.svglib import svg2rlg
         from reportlab.graphics import renderPM

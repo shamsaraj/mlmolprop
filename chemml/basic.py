@@ -1,123 +1,138 @@
-#!/usr/bin/env python
-# coding: utf-8
+"""Core statistics helpers used for QSAR model evaluation."""
 
-#Basic functions
-def sigma(theList):
-    sum = 0
-    n = len(theList)
-    for i in range(n):
-        xi = theList[i]
-        sum += xi
-    return sum
+from __future__ import annotations
 
-def press (l1,l2):
-    sum = 0
-    n1 = len(l1)
-    n2 = len(l2)
-    if n1 == n2:
-        for i in range (n1):
-            sum += ((l1[i] - l2[i])**2)
-        return sum
-    else:
-        print ("list error --> ", n1, " <> ", n2)
+import numpy as np
 
-def press_root (l1,l2):
-    from numpy import abs
-    sum = 0
-    n1 = len(l1)
-    n2 = len(l2)
-    if n1 == n2:
-        for i in range (n1):
-            sum += abs(l1[i] - l2[i])
-        return sum
-    else:
-        print ("list error --> ", n1, " <> ", n2)
 
-def press_m (l1,N):
-    from numpy import mean
-    sum = 0
-    n1 = len(l1)
-    for i in range (n1):
-        sum += ((l1[i] - mean(N))**2)
-    return sum
+def _check_same_length(a: np.ndarray, b: np.ndarray) -> None:
+    if a.shape != b.shape:
+        raise ValueError(f"inputs must be the same length, got {len(a)} and {len(b)}")
 
-def q2r2 (obs, pred):
-    from numpy import mean
-    n1=press(obs, pred)
-    n2 = press_m(obs, mean(obs))
-    q2 = 1 - (n1/n2)
-    return q2
-def r2test (obs, pred, train):
-    n1 = press(obs, pred)
-    n2 = press_m(obs, train)
-    if n2 != 0:
-        r2test = 1 - (n1 / n2)
-    else:
-        r2test = 0
-    return r2test
 
-def RMSEP_CV_C (obs,pred, k=0):
-    #root mean square of error prediction (external test set)
-    #root mean square of error of cross validation (training set) or SEDP (standard deviation of error of prediction)
-    from numpy import square
-    n1 = press (obs, pred)
-    n2 = len (obs)
-    if k == 0:
-        RMSE = square((n1 / n2))
-        MSE = ((n1/n2))
-    else:
-        # root mean square of error of calibration (training set R2) k--> number of descriptors (or components) or SEE (Standard error of estimate)
-        RMSE = square((n1/(n2-k-1)))
-        MSE = ((n1/(n2-k-1)))
-    return RMSE
+def press(observed, predicted) -> float:
+    """Sum of squared residuals (a.k.a. PRESS/RSS) between two sequences."""
+    observed = np.asarray(observed, dtype=float)
+    predicted = np.asarray(predicted, dtype=float)
+    _check_same_length(observed, predicted)
+    return float(np.sum((observed - predicted) ** 2))
 
-def F (obs, pred, k):
-    # for train set
-    from numpy import mean
-    Press = press_m (pred, mean(obs))
-    n2 = RMSEP_CV_C (obs,pred, k=k)
-    n1 = Press/k
-    f = n1/n2
-    return f
 
-def analyse(ytrain, y_pred_train, ytest, y_pred_test, ycv1, ycv2, k):#k = number of predictors The CV needs another formula for kfold and just works for LOO
-    r2= q2r2(ytrain, y_pred_train)
-    print (len(ytrain))
-    print(k)
-    e1 = ((len(ytrain))-1)/0.9999999999
-    e2 = ((len(ytrain)) - k - 1)
-    r2A= 1-((e1/e2)*(1-r2))
+def press_root(observed, predicted) -> float:
+    """Sum of absolute residuals between two sequences."""
+    observed = np.asarray(observed, dtype=float)
+    predicted = np.asarray(predicted, dtype=float)
+    _check_same_length(observed, predicted)
+    return float(np.sum(np.abs(observed - predicted)))
+
+
+def press_m(values, reference) -> float:
+    """Sum of squared deviations of ``values`` from ``mean(reference)``.
+
+    ``reference`` may be a precomputed scalar mean (``mean`` of a scalar is
+    itself, so this is a no-op) or an array-like whose mean is used as the
+    reference point. Both call styles are used elsewhere in this module.
+    """
+    values = np.asarray(values, dtype=float)
+    reference_mean = np.mean(reference)
+    return float(np.sum((values - reference_mean) ** 2))
+
+
+def q2r2(obs, pred) -> float:
+    """Q2/R2 = 1 - PRESS / total sum of squares of ``obs``."""
+    obs = np.asarray(obs, dtype=float)
+    ss_tot = press_m(obs, np.mean(obs))
+    if ss_tot == 0:
+        return 0.0
+    return 1 - press(obs, pred) / ss_tot
+
+
+def r2test(obs, pred, train) -> float:
+    """External R2 of a test set, using the training set's mean as reference."""
+    ss_tot = press_m(obs, train)
+    if ss_tot == 0:
+        return 0.0
+    return 1 - press(obs, pred) / ss_tot
+
+
+def RMSEP_CV_C(obs, pred, k: int = 0) -> float:
+    """Root mean square error, optionally adjusted for degrees of freedom.
+
+    With ``k=0`` this is the plain RMSE (external test set or LOO-CV set).
+    With ``k>0`` the denominator is adjusted by the number of predictors/
+    components ``k`` (training-set calibration RMSE, a.k.a. SEE).
+    """
+    ssr = press(obs, pred)
+    n = len(obs)
+    denom = n if k == 0 else n - k - 1
+    if denom <= 0:
+        raise ValueError(f"not enough observations ({n}) for k={k} predictors")
+    return float(np.sqrt(ssr / denom))
+
+
+def F(obs, pred, k: int) -> float:
+    """F-statistic (MSR / MSE) for a training-set regression with k predictors."""
+    obs = np.asarray(obs, dtype=float)
+    n = len(obs)
+    msr = press_m(pred, np.mean(obs)) / k
+    mse = press(obs, pred) / (n - k - 1)
+    return msr / mse
+
+
+def analyse(ytrain, y_pred_train, ytest, y_pred_test, ycv1, ycv2, k: int) -> dict:
+    """Compute a standard set of QSAR model-quality metrics.
+
+    Parameters
+    ----------
+    ytrain, y_pred_train : array-like
+        Observed and predicted values on the training set.
+    ytest, y_pred_test : array-like
+        Observed and predicted values on the external test set.
+    ycv1, ycv2 : array-like
+        Observed and predicted values under cross-validation.
+    k : int
+        Number of predictors (or latent components). The cross-validation
+        formula used here assumes leave-one-out CV; it is not a valid
+        adjustment for k-fold CV.
+
+    Returns
+    -------
+    dict
+        R2, R2_Adj, R2_test, F, q2, RMSE/MAE for train, test, and CV.
+    """
+    n_train = len(ytrain)
+    r2 = q2r2(ytrain, y_pred_train)
+    r2_adj = 1 - (((n_train - 1) / (n_train - k - 1)) * (1 - r2))
     q2 = q2r2(ycv1, ycv2)
-    R2test = r2test(ytest, y_pred_test, ytrain)
-    f = F (ytrain, y_pred_train, k)
-    RMSE_train = RMSEP_CV_C(ytrain, y_pred_train)
-    MAE_train = press_root(ytrain, y_pred_train)/len(ytrain)
-    RMSE_CV = RMSEP_CV_C(ycv1, ycv2)
-    MAE_CV = press_root(ycv1, ycv2) / len(ycv2)
-    RMSE_test = RMSEP_CV_C(ytest, y_pred_test)
-    MAE_test = press_root(ytest, y_pred_test) / len(ytest)
-    result = {"R2":r2, "R2_Adj": r2A, "R2_test":R2test, "F": f, "q2": q2, "RMSE_train": RMSE_train, "MAE_train": MAE_train, "RMSE_test": RMSE_test, "MAE_test": MAE_test, "RMSE_CV": RMSE_CV, "MAE_CV": MAE_CV}
-    return result
+    r2_test = r2test(ytest, y_pred_test, ytrain)
+    f = F(ytrain, y_pred_train, k)
+    rmse_train = RMSEP_CV_C(ytrain, y_pred_train)
+    mae_train = press_root(ytrain, y_pred_train) / n_train
+    rmse_cv = RMSEP_CV_C(ycv1, ycv2)
+    mae_cv = press_root(ycv1, ycv2) / len(ycv2)
+    rmse_test = RMSEP_CV_C(ytest, y_pred_test)
+    mae_test = press_root(ytest, y_pred_test) / len(ytest)
+    return {
+        "R2": r2,
+        "R2_Adj": r2_adj,
+        "R2_test": r2_test,
+        "F": f,
+        "q2": q2,
+        "RMSE_train": rmse_train,
+        "MAE_train": mae_train,
+        "RMSE_test": rmse_test,
+        "MAE_test": mae_test,
+        "RMSE_CV": rmse_cv,
+        "MAE_CV": mae_cv,
+    }
 
-def makecolumn(twodlist2, c):
-    import numpy
-    column = twodlist(c, 0)
-    twodlist2 = numpy.array(twodlist2)
-    for j in range(0, c):
-        column[j] += list(twodlist2[:, j])
-    return column
 
-def twodlist(m, n):
-    twod_list = []
-    for i in range(0, m):
-        new = []
-        for j in range(0, n):
-            new.append("none")
-        twod_list.append(new)
-    return twod_list
+def twodlist(m: int, n: int) -> list[list[str]]:
+    """Build an m x n list of lists pre-filled with the placeholder "none"."""
+    return [["none"] * n for _ in range(m)]
 
-def log(s,DEBUG):
-    if DEBUG:
-        print (s)
-  
 
+def makecolumn(data, c: int) -> list[list]:
+    """Return the first ``c`` columns of ``data`` as a list of Python lists."""
+    arr = np.asarray(data)
+    return [list(arr[:, j]) for j in range(c)]
