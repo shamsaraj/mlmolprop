@@ -2,9 +2,6 @@
 #conda install -c conda-forge cairo
 #pip install ipython
 
-from .env import *
-env4()
-
 import rdkit.Chem
 from rdkit.Chem import rdPartialCharges
 from rdkit.Chem import AllChem
