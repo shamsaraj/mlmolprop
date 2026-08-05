@@ -1,118 +1,158 @@
-from rdkit.Chem.rdMolDescriptors import *
-from rdkit.Chem import Descriptors
-from rdkit.Chem.rdmolops import RDKFingerprint
-from rdkit.Chem.AtomPairs.Sheridan import GetBPFingerprint
-from rdkit.Chem.EState.Fingerprinter import FingerprintMol
-from rdkit.Avalon.pyAvalonTools import GetAvalonFP #GetAvalonCountFP  #int vector version
-from rdkit.Chem.AllChem import  GetMorganFingerprintAsBitVect, GetErGFingerprint
-from rdkit.DataStructs.cDataStructs import ConvertToNumpyArray
-import rdkit.DataStructs.cDataStructs
-from rdkit.Chem import MACCSkeys
-from rdkit.Chem.Fingerprints import FingerprintMols
-import numpy as np
-import pandas as pd
-from .basic import log
+"""Compute molecular fingerprints (ECFP/Morgan, MACCS, Avalon, etc.) via RDKit."""
 
-#to disable RDkit warnings
-from rdkit import RDLogger 
-RDLogger.DisableLog('rdApp.*') 
+from __future__ import annotations
 
 import warnings
+
+import numpy as np
+import pandas as pd
+import rdkit.DataStructs.cDataStructs
+from rdkit import RDLogger
+from rdkit.Avalon.pyAvalonTools import GetAvalonFP
+from rdkit.Chem import Descriptors
+from rdkit.Chem.AllChem import GetErGFingerprint, GetMorganFingerprintAsBitVect
+from rdkit.Chem.EState.Fingerprinter import FingerprintMol
+from rdkit.Chem.Fingerprints import FingerprintMols
+from rdkit.Chem.rdMolDescriptors import (
+    GetHashedAtomPairFingerprintAsBitVect,
+    GetHashedTopologicalTorsionFingerprintAsBitVect,
+    GetMACCSKeysFingerprint,
+)
+from rdkit.Chem.rdmolops import RDKFingerprint
+from rdkit.DataStructs.cDataStructs import ConvertToNumpyArray
+
+RDLogger.DisableLog("rdApp.*")
 warnings.filterwarnings("ignore")
 
-DEBUG=False
-condition=True
-bit = {}
-def ExplicitBitVect_to_NumpyArray(bitvector):
-    bitstring = bitvector.ToBitString()
-    intmap = map(int, bitstring)
-    return np.array(list(intmap))
+_VALID_TYPES = {"ecfp4", "maccs", "all"}
 
-class fingerprint():
-    def __init__(self, fp_fun, name):
+
+def explicit_bitvect_to_numpy_array(
+    bitvector: rdkit.DataStructs.cDataStructs.ExplicitBitVect,
+) -> np.ndarray:
+    """Convert an RDKit ExplicitBitVect to a numpy array of 0/1 values."""
+    arr = np.zeros((0,), dtype=np.int8)
+    ConvertToNumpyArray(bitvector, arr)
+    return arr
+
+
+class Fingerprint:
+    """A named fingerprint function plus the results accumulated by applying it."""
+
+    def __init__(self, fp_fun, name: str):
         self.fp_fun = fp_fun
         self.name = name
-        self.x = []
+        self.x: list[np.ndarray] = []
 
-    def apply_fp(self, mols):
+    def apply_fp(self, mols) -> None:
         for mol in mols:
             fp = self.fp_fun(mol)
             if isinstance(fp, tuple):
                 fp = np.array(list(fp[0]))
-            if isinstance(fp, rdkit.DataStructs.cDataStructs.ExplicitBitVect):
-                fp = ExplicitBitVect_to_NumpyArray(fp)
-            if isinstance(fp,rdkit.DataStructs.cDataStructs.IntSparseIntVect):
+            elif isinstance(fp, rdkit.DataStructs.cDataStructs.ExplicitBitVect):
+                fp = explicit_bitvect_to_numpy_array(fp)
+            elif isinstance(fp, rdkit.DataStructs.cDataStructs.IntSparseIntVect):
                 fp = np.array(list(fp))
+            self.x.append(fp)
 
-            self.x += [fp]
 
-            #if (str(type(self.x[0])) != "<class 'numpy.ndarray'>"):
-                #print("WARNING: type for ", self.name, "is ", type(self.x[0]))
-
-def make_fingerprints(data,data_list, length = 256, path="", verbose=False, type_f="ECFP4", radius=2):
-    
-    
-    if type_f=="all":
-        fp_list = [
-         #fingerprint(lambda x : GetBPFingerprint(x, fpfn=AtomPair),
-         #            "Physiochemical properties (1996)"), ##NOTE: takes a long time to compute
-         fingerprint(lambda x : GetHashedAtomPairFingerprintAsBitVect(x, nBits = length),
-                     "Atom pair (1985)"),
-         fingerprint(lambda x : GetHashedTopologicalTorsionFingerprintAsBitVect(x, nBits = length),
-                     "Topological torsion (1987)"),
-         fingerprint(lambda x : GetMorganFingerprintAsBitVect(x, 3, nBits = length, useFeatures=True),
-                     "Morgan circular FCFP"),
-         fingerprint(lambda x: GetMorganFingerprintAsBitVect(x, radius=2, nBits=length, useFeatures=False, bitInfo=bit),
-                    "Morgan circular ECFP"),
-         fingerprint(FingerprintMol, "Estate (1995)"),
-         fingerprint(lambda x: GetAvalonFP(x, nBits=length),
-                    "Avalon bit based (2006)"),
-         fingerprint(lambda x: np.append(GetAvalonFP(x, nBits=length), Descriptors.MolWt(x)),
-                    "Avalon+mol. weight"),
-         fingerprint(lambda x: GetErGFingerprint(x), "ErG fingerprint (2006)"),
-         fingerprint(lambda x : RDKFingerprint(x, fpSize=length),
-                     "RDKit fingerprint"),
-         fingerprint(lambda x: GetMACCSKeysFingerprint(x),
-                    "MACCS"),
-         fingerprint(lambda x: FingerprintMols.FingerprintMol(x),
-                    "Daylight fingerprint"),
+def _build_fp_list(
+    type_f: str, length: int, radius: int, bit_info: dict
+) -> list[Fingerprint]:
+    kind = type_f.strip().lower()
+    if kind == "all":
+        return [
+            Fingerprint(
+                lambda x: GetHashedAtomPairFingerprintAsBitVect(x, nBits=length),
+                "Atom pair (1985)",
+            ),
+            Fingerprint(
+                lambda x: GetHashedTopologicalTorsionFingerprintAsBitVect(
+                    x, nBits=length
+                ),
+                "Topological torsion (1987)",
+            ),
+            Fingerprint(
+                lambda x: GetMorganFingerprintAsBitVect(
+                    x, 3, nBits=length, useFeatures=True
+                ),
+                "Morgan circular FCFP",
+            ),
+            Fingerprint(
+                lambda x: GetMorganFingerprintAsBitVect(
+                    x, radius=2, nBits=length, useFeatures=False, bitInfo=bit_info
+                ),
+                "Morgan circular ECFP",
+            ),
+            Fingerprint(FingerprintMol, "Estate (1995)"),
+            Fingerprint(
+                lambda x: GetAvalonFP(x, nBits=length), "Avalon bit based (2006)"
+            ),
+            Fingerprint(
+                lambda x: np.append(GetAvalonFP(x, nBits=length), Descriptors.MolWt(x)),
+                "Avalon+mol. weight",
+            ),
+            Fingerprint(GetErGFingerprint, "ErG fingerprint (2006)"),
+            Fingerprint(
+                lambda x: RDKFingerprint(x, fpSize=length), "RDKit fingerprint"
+            ),
+            Fingerprint(GetMACCSKeysFingerprint, "MACCS"),
+            Fingerprint(FingerprintMols.FingerprintMol, "Daylight fingerprint"),
         ]
-    elif type_f == "ECFP4":
-        try:
-            RDLogger.DisableLog('rdApp.*') 
-            fp_list=[fingerprint(lambda x :  GetMorganFingerprintAsBitVect(x, radius=radius, nBits = length, useFeatures=False, bitInfo=bit), "Morgan circular ECFP")]
+    if kind == "ecfp4":
+        return [
+            Fingerprint(
+                lambda x: GetMorganFingerprintAsBitVect(
+                    x, radius=radius, nBits=length, useFeatures=False, bitInfo=bit_info
+                ),
+                "Morgan circular ECFP",
+            )
+        ]
+    if kind == "maccs":
+        return [Fingerprint(GetMACCSKeysFingerprint, "MACCS")]
+    raise ValueError(f"type_f must be one of {sorted(_VALID_TYPES)}, got {type_f!r}")
 
-        except:
-            print ("error in fingerprnt module")
-    elif type_f == "MACCs":
-        try:
-            RDLogger.DisableLog('rdApp.*') 
-            fp_list=[fingerprint(lambda x: GetMACCSKeysFingerprint(x),
-                    "MACCS")]
 
-        except:
-            print ("error in fingerprnt module")
+def make_fingerprints(
+    data,
+    data_list,
+    length: int = 256,
+    verbose: bool = False,
+    type_f: str = "ECFP4",
+    radius: int = 2,
+) -> tuple[pd.DataFrame, dict]:
+    """Compute one or more fingerprint types for a list of RDKit molecules.
+
+    Parameters
+    ----------
+    data : list of rdkit.Chem.Mol
+        Molecules to fingerprint.
+    data_list : list
+        Parallel metadata; ``data_list[0]`` is used as the row index of the
+        returned DataFrame.
+    length : int, default 256
+        Fingerprint bit-vector length (``nBits``), where applicable.
+    verbose : bool, default False
+        Print progress as each fingerprint type is computed.
+    type_f : str, default "ECFP4"
+        Which fingerprint(s) to compute: ``"ECFP4"``, ``"MACCS"``, or
+        ``"all"`` (case-insensitive).
+    radius : int, default 2
+        Morgan fingerprint radius, used only when ``type_f="ECFP4"``.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, dict]
+        The fingerprint DataFrame (indexed by ``data_list[0]``) and the
+        Morgan bit-info dict populated for the last molecule processed.
+    """
+    bit_info: dict = {}
+    fp_list = _build_fp_list(type_f, length, radius, bit_info)
+
     for fp in fp_list:
-        RDLogger.DisableLog('rdApp.*')
-        if (verbose): print("doing", fp.name)
+        if verbose:
+            print("doing", fp.name)
         fp.apply_fp(data)
-    if condition==True:
-        df = pd.DataFrame(data=fp_list[0].x, index=data_list[0])# 0 is very important index here
-    # bit has to be changed to a list container for dictionaries    
-    return [df, bit]
 
-def make_fingerprints2(data,data_list, length = 256, verbose=False,type_f="ECFP4"):
-    if type_f== "ECFP4":
-        fp_list = [fingerprint(lambda x: GetMorganFingerprintAsBitVect(x, 2, nBits=length, useFeatures=False),
-                        "Morgan circular ECFP")]
-    elif type_f=="MACCs":
-        fp_list=[fingerprint(lambda x: GetMACCSKeysFingerprint(x),
-                    "MACCS")]
-
-    for fp in fp_list:
-        if (verbose): print("doing", fp.name)
-        fp.apply_fp(data)
-    #df = pd.DataFrame(data=fp_list[0].x, index=data_list[0])##
-    #pd.DataFrame.to_csv(df, path+"fps.csv")  # , index=True)## commented out for array jobs 
-    return df
-
+    df = pd.DataFrame(data=fp_list[0].x, index=data_list[0])
+    return df, bit_info
