@@ -1,207 +1,151 @@
-from multiprocessing import freeze_support
-import numpy as np
-import pandas as pd
-#import winsound
-from .basic import *
-from sklearn.ensemble import RandomForestClassifier  # Forests of randomized trees
-from sklearn.neural_network import MLPClassifier
-from sklearn import svm#, datasets
+"""Model interpretability: LIME instance explanations and partial dependence plots."""
+
+from __future__ import annotations
+
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
-def lime2(model, x, feature_names, y, type1="regression", n=8, i=0, graph=False):
+_VALID_MODES = {"classification", "regression"}
+
+
+def lime_explain(
+    model,
+    x,
+    feature_names,
+    y,
+    mode: str = "regression",
+    num_features: int = 8,
+    start: int = 0,
+    graph: bool = False,
+    verbose: bool = False,
+) -> list:
+    """Explain each row of ``x`` with a LIME tabular explainer.
+
+    Parameters
+    ----------
+    model : fitted estimator
+        Must implement ``predict`` (regression) or ``predict_proba``
+        (classification).
+    x : pandas.DataFrame
+        Feature matrix to explain, row by row.
+    feature_names : list[str]
+        Column names of ``x``.
+    y : array-like
+        Observed target values, reported alongside each explanation.
+    mode : {"classification", "regression"}, default "regression"
+    num_features : int, default 8
+        Number of features LIME includes in each local explanation.
+    start : int, default 0
+        Row index to start from (useful for resuming a long run). Rows
+        before ``start`` are left as the placeholder string ``"null"``.
+    graph : bool, default False
+        If True, also render each explanation via LIME's notebook/pyplot
+        display helpers (requires a Jupyter/IPython context).
+    verbose : bool, default False
+        Print each explanation's details as they're computed.
+
+    Returns
+    -------
+    list
+        One entry per row: ``[index, y[i], prediction, exp.as_list(), exp]``,
+        or the string ``"null"`` for rows before ``start``.
+    """
     import lime
     import lime.lime_tabular
-    # lime
+
+    if mode not in _VALID_MODES:
+        raise ValueError(f"mode must be one of {sorted(_VALID_MODES)}, got {mode!r}")
+
     tr = np.array(x)
-    # ts=np.array(set1[2])
-    explainer = lime.lime_tabular.LimeTabularExplainer(tr, feature_names=feature_names, verbose=True, mode=type1)
-    list1=len(tr)*["null"]
-    for i in range (i,len(tr)):
-        if type1== 'classification':
-            print ("lime is processing molecule", x.index[i])
-            print ("...")
-            #print x.iloc[i,]
-            exp = explainer.explain_instance(tr[i], model.predict_proba, num_features=n)
-            
-            print ("exp.predict_proba",exp.predict_proba)
+    explainer = lime.lime_tabular.LimeTabularExplainer(
+        tr, feature_names=feature_names, verbose=verbose, mode=mode
+    )
 
-            #print "exp.local_exp",exp.local_exp
-            print ("y[i]",y[i])
-            print ("exp.score",exp.score)
-            print ("exp.as_list()",exp.as_list())
+    results = len(tr) * ["null"]
+    for i in range(start, len(tr)):
+        if verbose:
+            print("lime is processing molecule", x.index[i])
 
-                       
-            list1[i]=[x.index.tolist()[i],y[i],exp.predict_proba,exp.as_list(),exp]
-        
-        elif type1== 'regression':
-            print ("lime is processing molecule", x.index[i])
-            print ("...")
-            #print x.iloc[i,]
-            exp = explainer.explain_instance(tr[i], model.predict, num_features=n)
-            #exp.show_in_notebook(show_table=True)
-            
-            print ("exp.predicted_value",exp.predicted_value)
-            
-            #print "exp.local_exp",exp.local_exp
-            print ("y[i]",y[i])
-            print ("exp.score",exp.score)
-            print ("exp.as_list()",exp.as_list())
-            #exp.as_pyplot_figure()
-            #plt.show()
-            list1[i]=[x.index.tolist()[i],y[i],exp.predicted_value,exp.as_list(),exp]
+        if mode == "classification":
+            exp = explainer.explain_instance(
+                tr[i], model.predict_proba, num_features=num_features
+            )
+            prediction = exp.predict_proba
+        else:
+            exp = explainer.explain_instance(
+                tr[i], model.predict, num_features=num_features
+            )
+            prediction = exp.predicted_value
+
+        if verbose:
+            print("prediction", prediction)
+            print("y[i]", y[i])
+            print("exp.score", exp.score)
+            print("exp.as_list()", exp.as_list())
+
+        results[i] = [x.index.tolist()[i], y[i], prediction, exp.as_list(), exp]
+
         if graph:
             exp.show_in_notebook(show_table=True)
             exp.as_pyplot_figure()
-            #plt.show()
-    return list1
+
+    return results
 
 
+def partial(
+    x,
+    y,
+    feature_importance: pd.DataFrame,
+    n_features: int = 4,
+    kind: str = "reg",
+    show: bool = True,
+):
+    """Fit a gradient-boosted model and plot partial dependence for its top features.
 
+    Parameters
+    ----------
+    x : pandas.DataFrame
+        Feature matrix.
+    y : array-like
+        Target values.
+    feature_importance : pandas.DataFrame
+        Feature ranking with feature names as the index and importance
+        scores in column 0, most important first after sorting (e.g. the
+        output of a feature-importance ranking step elsewhere in the
+        pipeline).
+    n_features : int, default 4
+        Number of top-ranked features to plot.
+    kind : {"reg", "class"}, default "reg"
+        Whether to fit a GradientBoostingRegressor or GradientBoostingClassifier.
+    show : bool, default True
+        Whether to call ``plt.show()`` after plotting.
 
+    Returns
+    -------
+    sklearn.inspection.PartialDependenceDisplay
+    """
+    from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+    from sklearn.inspection import PartialDependenceDisplay
 
-# skater
-
-def main(model, x, feature_names, type1="reg"):
-    from skater.core.explanations import Interpretation
-    from skater.model import InMemoryModel
-    from skater.core.local_interpretation.lime.lime_tabular import LimeTabularExplainer
-    if __name__ == '__main__':
-        freeze_support()
-    interpreter = Interpretation(x, feature_names=feature_names)
-    if type1 == "reg":
-        pyint_model = InMemoryModel(model.predict, examples=x)
-    plot = interpreter.feature_importance.plot_feature_importance(pyint_model)
-    # plot.show()
-
-# treeinterpreter
-def tree(model, x, feature_name ,y):
-    from treeinterpreter import treeinterpreter as ti
-    impact = ti.predict(model, x)
-    prediction, bias, contributions = impact
-    list1=len(x)*["null"]
-    list2 = len(x) * ["null"]
-    for i in range(len(x)):
-        print ("Instance", i)
-        print ("rela value", y[i])
-        print ("prediction", prediction[i])
-        print ("Bias (trainset mean)", bias[i])
-        print ("Feature contributions:")
-        for CC, feature in sorted(zip(contributions[i],
-                                      feature_name),
-                                  key=lambda x: -abs(x[0])):
-            print (feature, round(CC, 3))
-        #model.predict(x)[i]
-        list1[i]= (y[i],prediction[i]), sorted(zip(contributions[i],feature_name),key=lambda x: -abs(x[0]))
-        list2[i]=[(y[i],prediction[i]), zip(contributions[i],feature_name)]
-        print ("-" * 40)
-    df=pd.DataFrame(list1)
-    fe_name= len(feature_name)*[""]
-    fe_val=len(feature_name)*[""]
-    list3=twodlist(len(x),len(feature_name))
-    #list7=twodlist(len(x),len(feature_name))
-    list4=len(feature_name)*[""]
-    #list5=len(feature_name)*[""]
-    #print list1[10][1][4][0]
-    for j in range (len(x)):
-        for k in range (len(feature_name)):
-            fe_name[k]= list2[j][1][k][1]
-            fe_val[k]=list2[j][1][k][0]
-            list3[j][k]=[fe_name[k],fe_val[k]]
-            #list7[j][k] = [fe_name[k], abs(fe_val[k])]
-            list4[k] = np.mean(list3[j][k][1])
-            #list5[k]=[fe_name[k],list4[k]]
-        list6=sorted(zip(list4,fe_name),key=lambda x: -abs(x[0]))
-    
-    result =[x.index.tolist()[i],list1,df,list6]
-    return result
-
-
-# partial
-def partial(x, y, VI, n=4,type="reg"):
-    from sklearn.ensemble import GradientBoostingRegressor
-    from sklearn.ensemble import GradientBoostingClassifier
-    from sklearn.ensemble.partial_dependence import partial_dependence, plot_partial_dependence
-    import matplotlib.pyplot as plt  
-    VI2 = VI.sort_values(by=[0], ascending=False)
-    nn = VI2.index
-    nn = pd.Index.tolist(nn)
+    top_features = feature_importance.sort_values(
+        by=[0], ascending=False
+    ).index.tolist()
+    tr_x = np.array(x[top_features])
     tr_y = np.array(y)
-    tr = np.array(x[nn])  
-    if type == "reg":
-        gb = GradientBoostingRegressor(n_estimators=10).fit(tr, tr_y)
-    elif type == "class":
-        gb = GradientBoostingClassifier(n_estimators=10).fit(tr, tr_y)
-    print (nn[0:n])
-    ff = VI.iloc[0:4, 0]
-    fig = plot_partial_dependence(gb, tr, features=nn[0:n + 1], feature_names=nn[0:n + 1])
 
-    # plt.interactive(False)
-    # fig.show()
-    #plt.tight_layout(pad=0.4, w_pad=0.5, h_pad=0.1)
+    if kind == "reg":
+        model = GradientBoostingRegressor(n_estimators=10).fit(tr_x, tr_y)
+    elif kind == "class":
+        model = GradientBoostingClassifier(n_estimators=10).fit(tr_x, tr_y)
+    else:
+        raise ValueError(f"kind must be 'reg' or 'class', got {kind!r}")
+
+    selected = top_features[: n_features + 1]
+    display = PartialDependenceDisplay.from_estimator(
+        model, tr_x, features=selected, feature_names=selected
+    )
     plt.tight_layout()
-    plt.show()
-    # plt.interactive(False)
-    # raw_input("pause")
-
-
-def clas_graph(x,y,feathres_name,fe=[0,1]):
-    
-    fe=[feathres_name[feathres_name.index('Do you have a job stress?')],feathres_name[feathres_name.index('1-methyl-4-(1-methylethyl) benzene')]]
-    
-    X = x[fe]
-    X = np.array(X)
-
-    # step size in the mesh
-    h = .02  
-
-    # we create an instance of SVM and fit out data. We do not scale our data since we want to plot the support vectors
-    # SVM regularization parameter
-    C = 1.0  
-
-    svc = svm.SVC(kernel='linear', C=C).fit(X, y)
-    rbf_svc = svm.SVC(kernel='rbf', gamma=0.7, C=C).fit(X, y)
-    poly_svc = svm.SVC(kernel='poly', degree=3, C=C).fit(X, y)
-    lin_svc = svm.LinearSVC(C=C).fit(X, y)
-    rf = RandomForestClassifier(max_depth=2, random_state=10).fit(X,y)
-    nn= MLPClassifier().fit(X,y)
-
-    # create a mesh to plot in
-    x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
-    y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
-    xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
-                         np.arange(y_min, y_max, h))
-
-    # title for the plots
-    titles = ['SVC with linear kernel',
-              'LinearSVC (linear kernel)',
-              'SVC with RBF kernel',
-              'SVC with polynomial (degree 3) kernel',"rf","nn"]
-
-    print (6)
-    for i, clf in enumerate((svc, lin_svc, rbf_svc, poly_svc,rf,nn)):#
-        # Plot the decision boundary. For that, we will assign a color to each
-        # point in the mesh [x_min, m_max]x[y_min, y_max].
-        plt.subplot(2, 3, i + 1)
-        plt.subplots_adjust(wspace=0.4, hspace=0.4)
-
-        Z = clf.predict(np.c_[xx.ravel(), yy.ravel()])
-
-        # Put the result into a color plot
-        Z = Z.reshape(xx.shape)
-        print (11,xx[0])
-        print (22,yy[0])
-        print (33,Z[0])
-        plt.contourf(xx, yy, Z, cmap=plt.cm.Paired, alpha=0.8)
-
-        # Plot also the training points
-        plt.scatter(X[:, 0], X[:, 1], c=y, cmap=plt.cm.Paired)
-        plt.xlabel('Sepal length')
-        plt.ylabel('Sepal width')
-        plt.xlim(xx.min(), xx.max())
-        plt.ylim(yy.min(), yy.max())
-        plt.xticks(())
-        plt.yticks(())
-        plt.title(titles[i])
-
-    plt.show()
+    if show:
+        plt.show()
+    return display
