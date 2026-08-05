@@ -1,226 +1,279 @@
-import rdkit.ML.Descriptors
-from rdkit.ML.Descriptors import MoleculeDescriptors
-from .basic import twodlist
-from .basic import makecolumn
-import rdkit.Chem
-from rdkit import Chem
-from rdkit.Chem import Descriptors
-#from rdkit.Chem import Descriptors
-from rdkit.Chem import PandasTools
-from rdkit.Chem import AllChem
-from rdkit.Chem import SDMolSupplier
-from rdkit.Chem.AllChem import  GetMorganFingerprintAsBitVect, GetErGFingerprint
-import pandas as pd
-from .basic import log
-DEBUG=False
+"""Compute RDKit molecular descriptors and build QSAR-ready datasets."""
 
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+from rdkit import DataStructs
+from rdkit.Chem import (
+    AllChem,
+    Descriptors,
+    MACCSkeys,
+    PandasTools,
+    SDMolSupplier,
+    SmilesMolSupplier,
+)
+from rdkit.Chem.Fingerprints import FingerprintMols
+from rdkit.ML.Descriptors import MoleculeDescriptors
+
+from .basic import makecolumn, twodlist
+
+_SOURCE_TYPES = {"sdf", "smi", "molecule"}
+_DESCRIPTOR_SETS = {"all", "positive", "interpretable"}
 
 positive_prefixes = [
-    "fr_",          # fragment counts (~110 descriptors)
-    "Num",          # counts: NumAtoms, NumRings, etc.
-    "MolWt", "ExactMolWt", "HeavyAtomMolWt",
-    "TPSA", "LabuteASA", "SPS", "qed",
-    "PEOE_VSA", "SMR_VSA", "SlogP_VSA"  # surface area families
+    "fr_",  # fragment counts (~110 descriptors)
+    "Num",  # counts: NumAtoms, NumRings, etc.
+    "MolWt",
+    "ExactMolWt",
+    "HeavyAtomMolWt",
+    "TPSA",
+    "LabuteASA",
+    "SPS",
+    "qed",
+    "PEOE_VSA",
+    "SMR_VSA",
+    "SlogP_VSA",  # surface area families
 ]
-#Filter RDKit’s full list to only those
+# Filter RDKit's full descriptor list to only those starting with the above prefixes
 positive_desc_names = [
-    name for name, func in Descriptors.descList
-    if any(name.startswith(prefix) for prefix in positive_prefixes)
+    name
+    for name, _ in Descriptors.descList
+    if any(name.startswith(p) for p in positive_prefixes)
 ]
 
-easy_prefixes = [
-    "fr_",          # fragment counts (~110 descriptors)
-    "Num",          # counts: NumAtoms, NumRings, etc.
-    "MolWt", "ExactMolWt", "HeavyAtomMolWt",
-    "TPSA"
-]
-#Filter RDKit’s full list to only those
+easy_prefixes = ["fr_", "Num", "MolWt", "ExactMolWt", "HeavyAtomMolWt", "TPSA"]
 easy_desc_names = [
-    name for name, func in Descriptors.descList
-    if any(name.startswith(prefix) for prefix in easy_prefixes)
+    name
+    for name, _ in Descriptors.descList
+    if any(name.startswith(p) for p in easy_prefixes)
 ]
 
 
+def desc(
+    molecules, source: str = "molecule", delimiter: str = ",", selected_des: str = "all"
+) -> list:
+    """Compute RDKit descriptors for a set of molecules.
 
+    Parameters
+    ----------
+    molecules
+        Path to an SDF/SMILES file, or (if ``source="molecule"``) an
+        already-loaded list of RDKit Mol objects. Each molecule must have
+        a ``_Name`` property set.
+    source : {"sdf", "smi", "molecule"}, default "molecule"
+    delimiter : str, default ","
+        Field delimiter, used only when ``source="smi"``.
+    selected_des : {"all", "positive", "interpretable"}, default "all"
+        "positive" restricts to descriptors that are inherently
+        non-negative (counts, fragment counts, surface areas, ...);
+        "interpretable" restricts to a smaller, easy-to-explain subset.
 
-def desc(moleculesfile, type="molecule",delimiter=',',selected_des="all"):
-    if type == "sdf":
-        molecules_list = rdkit.Chem.SDMolSupplier(moleculesfile)
-    elif type == "smi":
-        molecules_list = rdkit.Chem.SmilesMolSupplier(moleculesfile,delimiter=delimiter,titleLine=True, smilesColumn=0,nameColumn=1)# as suppl1:
-    elif type== 'molecule':
-        molecules_list = moleculesfile
-    if type == type :
-        temp = rdkit.Chem.Descriptors
-        if selected_des == "all":
-            nms = [x[0] for x in Descriptors._descList]
-            
-        elif selected_des== "positive":
-            nms = positive_desc_names
-        elif selected_des== "interpretable":
-            nms = easy_desc_names
-            
-        names = len(molecules_list) * ["null"]
-        descrs = len(molecules_list) * ["null"]
-        # nms.remove('MolecularFormula')
-        calc = rdkit.ML.Descriptors.MoleculeDescriptors.MolecularDescriptorCalculator(nms)
-        for i in range(0, len(molecules_list)):
-
-            descrs[i] = calc.CalcDescriptors(molecules_list[i])
-            names[i] = molecules_list[i].GetProp("_Name")
-            #print (i,'->',names[i])
-        list = [names, nms, descrs]
-        return list
-
-def dataframe(list, input_activities, output, TARGET="IC50", type1="file", type2="des"):
-    if type1!="file":#A sdf should be provided instead
-        SDFFile = type1
-        sdftable = rdkit.Chem.PandasTools.LoadSDF(SDFFile)
-        
-        df = sdftable.loc[:, ["ID", TARGET]]
-        #df = df.iloc[:, [1,2]]
-        df.rename(columns={"ID": "name"},inplace=True)
-        pd.DataFrame.to_csv(df, input_activities, index=False)
-    if type2=="finger" or type2=="image":#fingerprint
-        df1 = pd.DataFrame(list)
-    if type2=="des":#In case that there is a predefined CSV file for activities
-        df1 = pd.DataFrame(list[2], index=list[0], columns=list[1])
-        #df1.iloc[:, 0]=df1.iloc[:, 0].astype(str)
-        #df1['name'] = df1['name'].astype(str)
-        #print (df1.info())
-        #print list[1]
-    merged = df1#just to control error and to make a dataframe for new external set prediction
-    if not input_activities == "":
-        f = open(input_activities, "rt")
-        reader = pd.read_csv(f)
-        reader['name'] = reader['name'].astype(str)
-        #print (reader.info())
-        merged = pd.merge(reader, df1, right_index=True, left_on="name")
-        pd.DataFrame.to_csv(merged, output, index=False)
+    Returns
+    -------
+    list
+        ``[names, descriptor_names, descriptor_values]``: molecule names,
+        the computed descriptor names, and a list of per-molecule
+        descriptor value tuples.
+    """
+    if source == "sdf":
+        molecules_list = SDMolSupplier(molecules)
+    elif source == "smi":
+        molecules_list = SmilesMolSupplier(
+            molecules, delimiter=delimiter, titleLine=True, smilesColumn=0, nameColumn=1
+        )
+    elif source == "molecule":
+        molecules_list = molecules
     else:
-        pd.DataFrame.to_csv(merged, output, index=False)
+        raise ValueError(
+            f"source must be one of {sorted(_SOURCE_TYPES)}, got {source!r}"
+        )
+
+    if selected_des == "all":
+        descriptor_names = [x[0] for x in Descriptors.descList]
+    elif selected_des == "positive":
+        descriptor_names = positive_desc_names
+    elif selected_des == "interpretable":
+        descriptor_names = easy_desc_names
+    else:
+        raise ValueError(
+            f"selected_des must be one of {sorted(_DESCRIPTOR_SETS)}, got {selected_des!r}"
+        )
+
+    names = len(molecules_list) * ["null"]
+    values = len(molecules_list) * ["null"]
+    calc = MoleculeDescriptors.MolecularDescriptorCalculator(descriptor_names)
+    for i in range(len(molecules_list)):
+        values[i] = calc.CalcDescriptors(molecules_list[i])
+        names[i] = molecules_list[i].GetProp("_Name")
+
+    return [names, descriptor_names, values]
+
+
+def dataframe(
+    desc_result,
+    input_activities: str | None,
+    output: str,
+    target: str = "IC50",
+    sdf_file: str | None = None,
+    source: str = "des",
+) -> pd.DataFrame:
+    """Merge computed descriptors/fingerprints with an activity table into a QSAR dataset.
+
+    Parameters
+    ----------
+    desc_result
+        Output of :func:`desc` (``source="des"``), or raw fingerprint
+        data indexable by ``pandas.DataFrame`` (``source in
+        {"finger", "image"}``).
+    input_activities : str or None
+        Path to a CSV of activities with a "name" column matching the
+        molecule names in ``desc_result``. If ``None``, the descriptor/
+        fingerprint DataFrame is written out as-is -- useful for scoring
+        an external set with no known activity.
+    output : str
+        Path the merged (or standalone) DataFrame is written to as CSV.
+    target : str, default "IC50"
+        Activity column to pull from ``sdf_file`` when generating
+        ``input_activities`` from an SDF.
+    sdf_file : str or None
+        If given, activities are extracted from this SDF's "ID" and
+        ``target`` fields and written to ``input_activities`` before
+        merging.
+    source : {"des", "finger", "image"}, default "des"
+        Shape of ``desc_result``.
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
+    if sdf_file is not None:
+        sdftable = PandasTools.LoadSDF(sdf_file)
+        activity_df = sdftable.loc[:, ["ID", target]].rename(columns={"ID": "name"})
+        activity_df.to_csv(input_activities, index=False)
+
+    if source in ("finger", "image"):
+        df1 = pd.DataFrame(desc_result)
+    elif source == "des":
+        df1 = pd.DataFrame(desc_result[2], index=desc_result[0], columns=desc_result[1])
+    else:
+        raise ValueError(
+            f"source must be one of 'des', 'finger', 'image', got {source!r}"
+        )
+
+    if input_activities is not None:
+        reader = pd.read_csv(input_activities)
+        reader["name"] = reader["name"].astype(str)
+        merged = pd.merge(reader, df1, right_index=True, left_on="name")
+    else:
+        merged = df1
+
+    merged.to_csv(output, index=False)
     return merged
 
-def tanimoto(molecules_list, list, output, type="fps"):
-    import pandas
-    from rdkit import DataStructs
-    from rdkit.Chem import MACCSkeys
-    from rdkit.Chem.Fingerprints import FingerprintMols
-    m = len(molecules_list)
-    Ttable = twodlist(m, m)
-    ms = molecules_list
-    if type == "fps":
-        #Daylight fingerprint
-        #The default set of parameters used by the fingerprinter is: - minimum path size: 1 bond -
-        # maximum path size: 7 bonds - fingerprint size: 2048 bits - number of bits set per hash: 2 -
-        # minimum fingerprint size: 64 bits - target on-bit density 0.3
-        fps = [FingerprintMols.FingerprintMol(x) for x in ms]
-    elif type == "maccs":
-        #There is a SMARTS-based implementation of the 166 public MACCS keys.
-        fps = [MACCSkeys.GenMACCSKeys(x) for x in ms]
-    elif type == "ecfp":
-        #The default atom invariants use connectivity information similar to those used for the well known ECFP family of fingerprints.
-        fps = [AllChem.GetMorganFingerprint(x,6) for x in ms]
-    elif type == "fcfp":
-        #Feature-based invariants, similar to those used for the FCFP fingerprints, can also be used.
-        fps = [AllChem.GetMorganFingerprint(x,6,useFeatures=True) for x in ms]
-    i = -1
-    for x in fps:
-        i = i + 1
-        j = -1
-        for y in fps:
-            #Tanimoto, Dice, Cosine, Sokal, Russel, Kulczynski, McConnaughey, and Tversky. eg: , metric=DataStructs.DiceSimilarity)
-            T = DataStructs.FingerprintSimilarity(x, y)#default is Tanimoto
-            j = j + 1
-            Ttable[i][j] = T
-        #Ttable[i][j] += list([T])
-    df1 = pandas.DataFrame(Ttable, index=list[0], columns=list[0])
-    pandas.DataFrame.to_csv(df1, output)
-    return df1
 
-def CI(X_train, X_test, v_names, Mtrain_names,Mtest_names, cutoff):
-    import numpy
-    import pandas
-    temp = numpy.array(X_train)
-    temp2 = numpy.array(X_test)
-    #print X_train
-    #print temp
-    # print X_train
-    r = len(temp)
-    c = len(temp[0])
+def tanimoto(molecules_list, names, output: str, kind: str = "fps") -> pd.DataFrame:
+    """Compute a pairwise Tanimoto similarity matrix for a list of molecules.
+
+    Parameters
+    ----------
+    molecules_list : list of rdkit.Chem.Mol
+    names : list
+        Molecule names/labels, used as the DataFrame's index and columns.
+    output : str
+        Path the similarity matrix is written to as CSV.
+    kind : {"fps", "maccs", "ecfp", "fcfp"}, default "fps"
+        Fingerprint used for similarity: Daylight ("fps"), MACCS keys,
+        Morgan/ECFP, or feature-based Morgan/FCFP.
+    """
+    if kind == "fps":
+        fps = [FingerprintMols.FingerprintMol(m) for m in molecules_list]
+    elif kind == "maccs":
+        fps = [MACCSkeys.GenMACCSKeys(m) for m in molecules_list]
+    elif kind == "ecfp":
+        fps = [AllChem.GetMorganFingerprint(m, 6) for m in molecules_list]
+    elif kind == "fcfp":
+        fps = [
+            AllChem.GetMorganFingerprint(m, 6, useFeatures=True) for m in molecules_list
+        ]
+    else:
+        raise ValueError(
+            f"kind must be one of 'fps', 'maccs', 'ecfp', 'fcfp', got {kind!r}"
+        )
+
+    n = len(fps)
+    table = twodlist(n, n)
+    for i, x in enumerate(fps):
+        for j, y in enumerate(fps):
+            table[i][j] = DataStructs.TanimotoSimilarity(x, y)
+
+    df = pd.DataFrame(table, index=names, columns=names)
+    df.to_csv(output)
+    return df
+
+
+def CI(
+    X_train, X_test, v_names, train_names, test_names, cutoff: float
+) -> list[pd.DataFrame]:
+    """Standardize train/test features against training-set statistics and flag outliers.
+
+    For each feature, z-scores (``|value - train_mean| / train_std``) are
+    computed for both train and test sets using the *training* set's mean
+    and standard deviation (features with zero training variance get a
+    z-score of 0). ``out_train``/``out_test`` keep only the z-scores that
+    exceed ``cutoff``, leaving the placeholder string ``"none"``
+    elsewhere -- matching the original R ``CI_Test`` this was ported from.
+
+    Returns
+    -------
+    list[pandas.DataFrame]
+        ``[table_train, table_test, out_train, out_test]``, each a
+        z-score table indexed by ``train_names``/``test_names``.
+    """
+    train = np.array(X_train)
+    test = np.array(X_test)
+    r, c = len(train), len(train[0])
+    r2 = len(test)
+
     table_train = twodlist(r, c)
+    table_test = twodlist(r2, c)
     out_train = twodlist(r, c)
-    r2 = len(temp2)
-    c2 = len(temp2[0])
-    table_test = twodlist(r2, c2)
-    out_test= twodlist(r2, c2)
-    # print X_train[0][1]
-    for i in range(0, r):
-        table_train[i] = temp[i]
+    out_test = twodlist(r2, c)
+
+    for i in range(r):
+        table_train[i] = train[i]
         if i < r2:
-            table_test[i] = temp2[i]
+            table_test[i] = test[i]
+
     column = makecolumn(table_train, c)
-    #column = makecolumn(table_test, c2)
-    for i in range(0, r):
-        for j in range(0, c):
-            # print column [j]
-            if numpy.std(column[j]) != 0:
-                # It is the python version of the R:CI_Test[n,i]<- abs((MATRIX_T[n,ph[i]]- MEAN[i])/SD2[i])
-                table_train[i][j] = numpy.abs((table_train[i][j] - numpy.mean(column[j])) / numpy.std(column[j]))
+    col_means = [np.mean(column[j]) for j in range(c)]
+    col_stds = [np.std(column[j]) for j in range(c)]
+
+    for i in range(r):
+        for j in range(c):
+            if col_stds[j] != 0:
+                table_train[i][j] = np.abs(
+                    (table_train[i][j] - col_means[j]) / col_stds[j]
+                )
                 if i < r2:
-                    table_test[i][j] = numpy.abs((table_test[i][j] - numpy.mean(column[j])) / numpy.std(column[j]))
+                    table_test[i][j] = np.abs(
+                        (table_test[i][j] - col_means[j]) / col_stds[j]
+                    )
             else:
                 table_train[i][j] = 0
                 if i < r2:
                     table_test[i][j] = 0
-    for i in range(0, r):
-        for j in range(0, c):
-            if table_train[i][j] > cutoff:
-                out_train [i][j]=table_train[i][j]
-                if i < r2:
-                    if table_test[i][j] > cutoff:
-                        out_test[i][j] = table_test[i][j]
-    tables = [pandas.DataFrame(table_train, columns=v_names, index=Mtrain_names), pandas.DataFrame(table_test, columns=v_names, index=Mtest_names),pandas.DataFrame(out_train, columns=v_names, index=Mtrain_names), pandas.DataFrame(out_test, columns=v_names,index=Mtest_names)]
-    return tables
 
-#deprecated
-def finger(molecules_list, list1, type="fps"):
-    import pandas
-    from rdkit import DataStructs
-    from rdkit.Chem import MACCSkeys
-    from rdkit.Chem.Fingerprints import FingerprintMols
-    m = len(molecules_list)
-    #Ttable = twodlist(m, m)
-    ms = molecules_list
-    if type == "fps":
-        #Daylight fingerprint
-        #The default set of parameters used by the fingerprinter is: - minimum path size: 1 bond -
-        # maximum path size: 7 bonds - fingerprint size: 2048 bits - number of bits set per hash: 2 -
-        # minimum fingerprint size: 64 bits - target on-bit density 0.3
-        fps = [FingerprintMols.FingerprintMol(x) for x in ms]
-        print (fps)
-    elif type == "maccs":
-        #There is a SMARTS-based implementation of the 166 public MACCS keys.
-        fps = [MACCSkeys.GenMACCSKeys(x) for x in ms]
-    elif type == "ecfp":
-        #The default atom invariants use connectivity information similar to those used for the well known ECFP family of fingerprints.
-        #fps = [AllChem.GetMorganFingerprint(x,6) for x in ms]
-        fps= [GetMorganFingerprintAsBitVect (x,6, nBits=512) for x in ms]
-        #print fps[0]
-        fps=fps[0].ToBitString()
-        #y=rdkit.DataStructs.cDataStructs.ExplicitBitVect(fps[0])
-        #y= rdkit.DataStructs.cDataStructs.IntSparseIntVect (fps[0])
-        #y = fps[0].ToBitString()
-        
-        #y= list(fps)
-        #print y
-        
-        #print y
-    elif type == "fcfp":
-        #Feature-based invariants, similar to those used for the FCFP fingerprints, can also be used.
-        fps = [AllChem.GetMorganFingerprint(x,6,useFeatures=True) for x in ms]
-    print (fps)
-    df1 = pandas.DataFrame(fps, index=list1[0])#, columns=list[0])
-    pandas.DataFrame.to_csv(df1, "D:/pych/ml/eh2/fps.csv")#, index=True)
-    print (df1)
-    return (df1)
+    for i in range(r):
+        for j in range(c):
+            if table_train[i][j] > cutoff:
+                out_train[i][j] = table_train[i][j]
+                if i < r2 and table_test[i][j] > cutoff:
+                    out_test[i][j] = table_test[i][j]
+
+    return [
+        pd.DataFrame(table_train, columns=v_names, index=train_names),
+        pd.DataFrame(table_test, columns=v_names, index=test_names),
+        pd.DataFrame(out_train, columns=v_names, index=train_names),
+        pd.DataFrame(out_test, columns=v_names, index=test_names),
+    ]
