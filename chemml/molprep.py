@@ -1,230 +1,202 @@
-#molecules will be prapared using RDKIT
-#conda install -c conda-forge cairo
-#pip install ipython
+"""Prepare molecules with RDKit: salt removal, 3D embedding, and rendering.
 
-import rdkit.Chem
-from rdkit.Chem import rdPartialCharges
-from rdkit.Chem import AllChem
-from rdkit.Chem import Draw
-from rdkit.Chem.SaltRemover import SaltRemover
-#from rdkit.Chem.Draw import IPythonConsole
-from IPython.display import SVG
-##################################################
-from rdkit.Chem import rdDepictor
-from rdkit.Chem.Draw import rdMolDraw2D
-#import cairosvg
+Requires cairo (``conda install -c conda-forge cairo``) for SVG rendering.
+"""
+
+from __future__ import annotations
+
 import os
 
-#to disable rdkit warning
+import rdkit.Chem
 from rdkit import RDLogger
-RDLogger.DisableLog('rdApp.*')
+from rdkit.Chem import AllChem, rdDepictor, rdPartialCharges
+from rdkit.Chem.Draw import rdMolDraw2D
+from rdkit.Chem.SaltRemover import SaltRemover
 
-def moltosvg(mol,molSize=(450,150),kekulize=True):
-    import time
-    print(time.asctime())
+RDLogger.DisableLog("rdApp.*")
+
+_SALT_REMOVER = SaltRemover()
+_VALID_FORMATS = {"sdf", "smi"}
+
+
+def moltosvg(mol, molSize: tuple[int, int] = (450, 150), kekulize: bool = True) -> str:
+    """Render a single RDKit molecule to SVG markup."""
     mc = rdkit.Chem.Mol(mol.ToBinary())
     if kekulize:
         try:
             rdkit.Chem.Kekulize(mc)
-        except:
-            print ("can not be kekulized")
+        except Exception:  # noqa: BLE001 -- no specific Kekulize exception in RDKit
+            print("can not be kekulized")
             mc = rdkit.Chem.Mol(mol.ToBinary())
     if not mc.GetNumConformers():
         rdDepictor.Compute2DCoords(mc)
-    drawer = rdMolDraw2D.MolDraw2DSVG(molSize[0],molSize[1])
+    drawer = rdMolDraw2D.MolDraw2DSVG(molSize[0], molSize[1])
     drawer.DrawMolecule(mc)
     drawer.FinishDrawing()
-    svg = drawer.GetDrawingText()
-    return svg.replace('svg:','')
+    return drawer.GetDrawingText().replace("svg:", "")
 
-def mol_prep (moleculefile):
+
+def mol_prep(mol):
+    """Strip salts, embed a 3D conformer, and compute Gasteiger charges for ``mol``.
+
+    Parameters
+    ----------
+    mol : rdkit.Chem.Mol
+
+    Returns
+    -------
+    rdkit.Chem.Mol
+        A new molecule (hydrogens removed again after embedding) with a 3D
+        conformer and Gasteiger partial charges (``_GasteigerCharge`` atom
+        property) computed.
+
+    Raises
+    ------
+    ValueError
+        If salt removal, 2D coordinate generation, charge calculation, or
+        3D embedding fails for this molecule.
+    """
+    if mol is not None and mol.HasProp("_Name"):
+        name = mol.GetProp("_Name")
+    else:
+        name = "<unnamed>"
     try:
-        m1 = moleculefile
-        #print (m1.GetProp("_Name"), "to 3d")
-        
-        #try:
-        #print m1.GetNumAtoms()
-        #remover = SaltRemover(defnData="[Cl,Br]")
-        
-        remover = SaltRemover()
-        #print len(remover.salts)
-        
-        res = remover.StripMol(m1)
-        #res is not None
-        #print res.GetNumAtoms()
-        
-        m2 = rdkit.Chem.AddHs(res)#
-        
-        #print (rdkit.Chem.MolToMolBlock(m2))
-        
-        AllChem.Compute2DCoords(m2)####
-        
-        rdPartialCharges.ComputeGasteigerCharges(m2)
-        #print float(m2.GetAtomWithIdx(0).GetProp('_GasteigerCharge'))
-        
-        AllChem.EmbedMolecule(m2)
+        stripped = _SALT_REMOVER.StripMol(mol)
+        with_hs = rdkit.Chem.AddHs(stripped)
+        AllChem.Compute2DCoords(with_hs)
+        rdPartialCharges.ComputeGasteigerCharges(with_hs)
+        AllChem.EmbedMolecule(with_hs)
         try:
-            AllChem.UFFOptimizeMolecule(m2)
-        except:
+            AllChem.UFFOptimizeMolecule(with_hs)
+        except Exception:  # noqa: BLE001, S110 -- UFF optimization is best-effort
             pass
-        #AllChem.EmbedMolecule(m2, AllChem.ETKDG())
-        #AllChem.MMFFOptimizeMolecule(m2)
-        
-        m3 = rdkit.Chem.RemoveHs(m2)
-        #except:
-            #print ("AllChem.UFFOptimizeMolecule(m2) ValueError: Bad Conformer Id")
-            
-    except:
-        
-        print ("smiles cannot be processed")
-        m2 = rdkit.Chem.MolFromSmiles("c1ccccc1") 
-        m2.SetProp("_Name","dummy")
-        m2 = rdkit.Chem.AddHs(res)
-        AllChem.Compute2DCoords(m2)
-        rdPartialCharges.ComputeGasteigerCharges(m2)
-        #print float(m2.GetAtomWithIdx(0).GetProp('_GasteigerCharge'))
-        
-        AllChem.EmbedMolecule(m2)
-        m3 = rdkit.Chem.RemoveHs(m2)
-        print ("error in molprop type 8")
-    return m3
+        return rdkit.Chem.RemoveHs(with_hs)
+    except Exception as exc:
+        raise ValueError(f"failed to prepare molecule {name!r}: {exc}") from exc
 
-def mol_enumerate (moleculesfile,output1, output2, format="sdf",moleculefiles2="", image=False, imagepath="D:/pych/ml/MR1/images", delimiter=',',print_int=50):
-    input_molecules=[]
-    #help(rdkit.Chem.SmilesMolSupplier)
-    if format == "sdf":
-        with rdkit.Chem.SDMolSupplier(moleculesfile) as suppl1:
-            for mol1 in suppl1:
-                if mol1 is not None:
-                    pass
-                else:
-                    mol1 = rdkit.Chem.MolFromSmiles("c1ccccc1")
-                    mol1.SetProp("_Name","dummy")
-                    print ("Molecule number:"+str(n)+" error in molprop")
-                input_molecules.append(mol1)
-        if moleculefiles2 != "":
-            input_molecules2 = rdkit.Chem.SDMolSupplier(moleculefiles2)
-        
-    elif format == "smi":
-        if 1==1:#with
-        
-            suppl1= rdkit.Chem.SmilesMolSupplier(moleculesfile,delimiter=delimiter,titleLine=True, smilesColumn=0,nameColumn=1)# as suppl1:
-            n=0
-            for mol1 in suppl1:
-                #print (mol1)
-                if mol1 is not None:
-                    pass
-                else:
-                    mol1 = rdkit.Chem.MolFromSmiles("c1ccccc1")
-                    mol1.SetProp("_Name","dummy")
-                    print ("Molecule number:"+str(n)+" error in molprop")
-                input_molecules.append(mol1)
-                n=n+1
-        if moleculefiles2 != "":
-            input_molecules2 = rdkit.Chem.SDMolSupplier(moleculefiles2)
-        if moleculefiles2 != "":
-            input_molecules2 = rdkit.Chem.SmilesMolSupplier(moleculefiles2,delimiter=delimiter,titleLine=True, smilesColumn=0,nameColumn=1)
-    print (" len (input_molecules) ", len (input_molecules) )
-    input_molecules_list = len (input_molecules) * ["null"]
-    if moleculefiles2 != "":
-        input_molecules_list2 = len(input_molecules2) * ["null"]
-    i = 0
-    w1 = rdkit.Chem.SDWriter(output1)
-    w2 = rdkit.Chem.SDWriter(output2)
-    #RDimage(input_molecules)
-    for mol in input_molecules:
-        #print (mol)
-        #print (i , mol.GetProp("_Name"), "to 3d")
-        if i%print_int==0 or i == 0:
-            print (i , mol.GetProp("_Name"), "to 3d")
-        preparedmolecule=mol_prep(mol)
-        input_molecules_list[i] = preparedmolecule
-        i = i + 1
-        w1.write(preparedmolecule)
-        p = (preparedmolecule)
-        AllChem.Compute2DCoords(p)
-        w2.write(p)
-    w1.close()
-    w2.close()
-    if image == True:
-        RDimage(input_molecules_list,imagepath)
-    return input_molecules_list
 
-def RDimage (ms,dir):
-    
-    from rdkit.Chem import rdDepictor
-    #Draw.MolDrawing.dotsPerAngstrom = 60
-    #Draw.MolDrawing.atomLabelFontSize = 12
-    #DrawingOptions.bondLineWidth = 3.0
-    ms1=ms
-    for m in ms1:
-        AllChem.Compute2DCoords(m)
-    #img = Draw.MolsToGridImage(ms1, molsPerRow=4, subImgSize=(300, 300), legends=[x.GetProp("_Name") for x in ms1])
-    #img.save(dir + "molgrid.png")
-    i=0
-    for m in ms1:
-        i = i + 1
-        print (i)
-        print (m.GetProp("_Name"), "to svg")
-        #AllChem.Compute2DCoords(m)
-        rdkit.Chem.RemoveHs(m)
-        #Draw.MolToFile(m,fileName=dir + m.GetProp("_Name") + ".png", size=(300, 300), kekulize=True,
-                   #wedgeBonds=False, fitImage=False, options=None, canvas=None, imageType=None,
-                   #highlightAtoms=None)
-        #Draw.MolToFile(m, dir + m.GetProp("_Name") + "-2.png")
+def _load_molecules(moleculesfile, input_format: str, delimiter: str):
+    if input_format == "sdf":
+        with rdkit.Chem.SDMolSupplier(moleculesfile) as suppl:
+            return list(suppl)
+    if input_format == "smi":
+        suppl = rdkit.Chem.SmilesMolSupplier(
+            moleculesfile,
+            delimiter=delimiter,
+            titleLine=True,
+            smilesColumn=0,
+            nameColumn=1,
+        )
+        return list(suppl)
+    raise ValueError(
+        f"input_format must be one of {sorted(_VALID_FORMATS)}, got {input_format!r}"
+    )
+
+
+def mol_enumerate(
+    moleculesfile,
+    output1: str,
+    output2: str,
+    input_format: str = "sdf",
+    image: bool = False,
+    imagepath: str | None = None,
+    delimiter: str = ",",
+    print_int: int = 50,
+) -> list:
+    """Prepare every molecule in ``moleculesfile``, writing 3D and 2D SDFs.
+
+    Parameters
+    ----------
+    moleculesfile : str
+        Path to the input SDF or SMILES file.
+    output1, output2 : str
+        Paths the 3D-prepared and 2D-rendered SDF files are written to.
+    input_format : {"sdf", "smi"}, default "sdf"
+    image : bool, default False
+        If True, also render an SVG/TIF/GIF image of each molecule (see
+        :func:`RDimage`); requires ``imagepath``.
+    imagepath : str or None
+        Output directory for images, required if ``image=True``.
+    delimiter : str, default ","
+        Field delimiter, used only when ``input_format="smi"``.
+    print_int : int, default 50
+        Print progress every ``print_int`` molecules.
+
+    Returns
+    -------
+    list of rdkit.Chem.Mol
+        The successfully prepared molecules (3D conformers intact).
+        Molecules that fail preparation are skipped with a printed
+        warning, so this list may be shorter than the input.
+    """
+    if image and not imagepath:
+        raise ValueError("imagepath is required when image=True")
+
+    input_molecules = _load_molecules(moleculesfile, input_format, delimiter)
+    for i, mol in enumerate(input_molecules):
+        if mol is None:
+            fallback = rdkit.Chem.MolFromSmiles("c1ccccc1")
+            fallback.SetProp("_Name", "dummy")
+            input_molecules[i] = fallback
+            print(
+                f"Molecule number {i}: could not be parsed, substituted a placeholder"
+            )
+
+    print("len(input_molecules)", len(input_molecules))
+
+    prepared_molecules = []
+    with rdkit.Chem.SDWriter(output1) as w1, rdkit.Chem.SDWriter(output2) as w2:
+        for i, mol in enumerate(input_molecules):
+            if i % print_int == 0:
+                print(i, mol.GetProp("_Name"), "to 3d")
+            try:
+                prepared = mol_prep(mol)
+            except ValueError as exc:
+                print(f"skipping molecule {i}: {exc}")
+                continue
+
+            prepared_molecules.append(prepared)
+            w1.write(prepared)
+
+            # Compute2DCoords mutates in place and would destroy the 3D
+            # conformer, so write the 2D rendering from a copy. Mol(mol)
+            # (not mol.ToBinary(), which drops private properties like
+            # _Name) preserves everything while staying independent.
+            prepared_2d = rdkit.Chem.Mol(prepared)
+            AllChem.Compute2DCoords(prepared_2d)
+            w2.write(prepared_2d)
+
+    if image:
+        RDimage(prepared_molecules, imagepath)
+    return prepared_molecules
+
+
+def RDimage(mols, output_dir: str) -> None:
+    """Render each molecule to an SVG (plus TIF/GIF) file in ``output_dir``.
+
+    Operates on copies, so the caller's molecules (including any 3D
+    conformer) are left untouched.
+    """
+    from reportlab.graphics import renderPM
+    from svglib.svglib import svg2rlg
+
+    for i, mol in enumerate(mols):
+        print(i, mol.GetProp("_Name"), "to svg")
+        m = rdkit.Chem.Mol(mol)  # copy, not mol.ToBinary() (drops private properties)
+        m = rdkit.Chem.RemoveHs(m)
         rdkit.Chem.SanitizeMol(m)
         rdkit.Chem.Kekulize(m)
-        #Draw.MolToFile(m, dir + m.GetProp("_Name") + ".png")
-        #Draw.MolToImage(m)
         rdDepictor.Compute2DCoords(m)
+
         drawer = rdMolDraw2D.MolDraw2DSVG(300, 150)
-        #drawer.SetFontSize(0.8)
         drawer.DrawMolecule(m)
         drawer.FinishDrawing()
-        svg = drawer.GetDrawingText().replace('svg:', '')
-        name=dir + m.GetProp("_Name") + ".svg"
-        with open(name, 'w') as f:
-            f.write(svg)#to write svg file on disk
-        SVG(svg)
-        from svglib.svglib import svg2rlg
-        from reportlab.graphics import renderPM
+        svg = drawer.GetDrawingText().replace("svg:", "")
+
+        name = os.path.join(output_dir, m.GetProp("_Name") + ".svg")
+        with open(name, "w") as f:
+            f.write(svg)
+
         drawing = svg2rlg(name)
-        #The png and jpg are sometimes bugy
-        #renderPM.drawToFile(drawing, name[:-4] + ".png", fmt='png')
-        #renderPM.drawToFile(drawing, name[:-4]+".jpg", fmt='jpg')
-        renderPM.drawToFile(drawing, name[:-4] + ".tif", fmt='tif')
-        renderPM.drawToFile(drawing, name[:-4] + ".gif", fmt='gif')
-
-
-        #SVG(moltosvg(mol))
-        #Compatible with python 2.7
-        #cairosvg.svg2png(svg, write_to=dir + m.GetProp("_Name") + '.png')
-        #os.remove()
-
-        #cairosvg.svg2pdf(svg, write_to=dir + m.GetProp("_Name") + '.pdf')
-
-####should be updated according to the smiles def #deprecated
-def mol_enumerate_old (moleculesfile): 
-    input_molecules = rdkit.Chem.SDMolSupplier(moleculesfile)
-    number_input_molecules= 0
-    for mol in input_molecules:
-        mol_prep(mol)
-        number_input_molecules= number_input_molecules +1
-    input_molecules_list = number_input_molecules * ["null"]
-    i = 0
-    w = rdkit.Chem.SDWriter('D:/qsar/prepared-structures-3D.sdf')
-    for mol in input_molecules:
-        input_molecules_list[i] = mol_prep(mol)
-        i = i + 1
-        w.write(mol)
-    w.close()
-    return input_molecules_list
-
-
-
-
-
-
-
-
-
+        renderPM.drawToFile(drawing, name[:-4] + ".tif", fmt="tif")
+        renderPM.drawToFile(drawing, name[:-4] + ".gif", fmt="gif")
