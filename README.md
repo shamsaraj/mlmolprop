@@ -84,10 +84,19 @@ print(model_result[0])  # metrics dict
 
 [`examples/quickstart.ipynb`](examples/quickstart.ipynb) runs the full pipeline
 above end-to-end against a small set of real molecules with a synthetic
-activity value: molecule preparation → descriptors → dataset processing →
-model training → evaluation plots. Open it with `jupyter notebook` after
-installing (the `notebook`/`nbconvert` dev tools are included in
-`environment.yml`).
+activity value, then goes further:
+
+- molecule preparation → descriptors → dataset processing → model training → evaluation
+- algorithm comparison across several regressor types
+- hyperparameter search over a random forest's `c` argument
+- feature importance: variable importance + partial dependence
+- LIME: explaining a single molecule's prediction
+- 2D structure depictions, including substructure highlighting
+- classification with a small Keras deep-learning model, with automatic
+  confusion-matrix visualization
+
+Open it with `jupyter notebook` after installing (the `notebook`/`nbconvert`
+dev tools are included in `environment.yml`).
 
 ---
 
