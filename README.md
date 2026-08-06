@@ -1,6 +1,6 @@
-# chemsar — Cheminformatics & QSAR Modeling Toolkit
+# mlmolprop — Cheminformatics & QSAR Modeling Toolkit
 
-**chemsar** is a modular Python framework for cheminformatics and QSAR (Quantitative Structure–Activity Relationship) modeling.
+**mlmolprop** is a modular Python framework for cheminformatics and QSAR (Quantitative Structure–Activity Relationship) modeling.
 It enables molecular descriptor generation, fingerprint computation, dataset preprocessing, feature selection, and machine learning analysis — all within one workflow.
 
 This toolkit integrates **RDKit**, **scikit-learn**, **Keras/TensorFlow**, **LIME**, and **matplotlib** to streamline molecular data preparation, model building, and interpretation.
@@ -35,7 +35,7 @@ cd Chem_ML
 Create the environment (conda, recommended):
 ```bash
 conda env create -f environment.yml
-conda activate chemsar
+conda activate mlmolprop
 ```
 
 Or install directly with pip:
@@ -49,14 +49,14 @@ pip install -e .
 
 ### 1. Prepare Molecules
 ```python
-from chemsar import mol_enumerate
+from mlmolprop import mol_enumerate
 
 molecules = mol_enumerate("input.sdf", "prepared_3d.sdf", "prepared_2d.sdf")
 ```
 
 ### 2. Generate Descriptors
 ```python
-from chemsar import desc, dataframe
+from mlmolprop import desc, dataframe
 
 desc_data = desc(molecules, source="molecule")
 merged = dataframe(desc_data, "activity.csv", "merged.csv")
@@ -64,14 +64,14 @@ merged = dataframe(desc_data, "activity.csv", "merged.csv")
 
 ### 3. Process Dataset
 ```python
-from chemsar import data_prep
+from mlmolprop import data_prep
 
 result = data_prep("merged.csv", Scaled="on", FS="reg", Cor="on", mod="reg")
 ```
 
 ### 4. Build and Evaluate Models
 ```python
-from chemsar import Model
+from mlmolprop import Model
 
 X_train, y_train, X_test, y_test, v_names = result[:5]
 model_result = Model(X_train, y_train, X_test, y_test, v_names, M="rf")

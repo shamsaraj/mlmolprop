@@ -1,11 +1,11 @@
-"""Tests for chemsar.image."""
+"""Tests for mlmolprop.image."""
 
 import os
 
 import numpy as np
 import pytest
 
-from chemsar.image import highlight, images_to_dataframe, svg_files_to_png
+from mlmolprop.image import highlight, images_to_dataframe, svg_files_to_png
 
 
 def test_highlight_returns_valid_svg():

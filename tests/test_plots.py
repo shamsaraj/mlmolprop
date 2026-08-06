@@ -1,8 +1,8 @@
-"""Tests for chemsar.plots."""
+"""Tests for mlmolprop.plots."""
 
 import pytest
 
-from chemsar.plots import plot_features
+from mlmolprop.plots import plot_features
 
 
 @pytest.fixture

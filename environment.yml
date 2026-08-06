@@ -1,5 +1,5 @@
 # Reproducible dev environment: conda env create -f environment.yml
-name: chemsar
+name: mlmolprop
 channels:
   - conda-forge
 dependencies:

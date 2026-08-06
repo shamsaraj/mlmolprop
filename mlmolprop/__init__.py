@@ -1,4 +1,4 @@
-"""chemsar: cheminformatics and QSAR modeling toolkit built on RDKit and scikit-learn."""
+"""mlmolprop: cheminformatics and QSAR modeling toolkit built on RDKit and scikit-learn."""
 
 from .basic import (
     RMSEP_CV_C,

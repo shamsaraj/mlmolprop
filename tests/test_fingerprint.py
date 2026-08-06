@@ -1,8 +1,8 @@
-"""Tests for chemsar.fingerprint."""
+"""Tests for mlmolprop.fingerprint."""
 
 import pytest
 
-from chemsar.fingerprint import Fingerprint, make_fingerprints
+from mlmolprop.fingerprint import Fingerprint, make_fingerprints
 
 
 @pytest.mark.parametrize("type_f", ["ECFP4", "maccs", "MACCs", "all"])

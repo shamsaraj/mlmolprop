@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the chemsar test suite."""
+"""Shared pytest fixtures for the mlmolprop test suite."""
 
 from __future__ import annotations
 

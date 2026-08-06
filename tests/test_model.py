@@ -1,10 +1,10 @@
-"""Tests for chemsar.model -- parametrized across every supported model type."""
+"""Tests for mlmolprop.model -- parametrized across every supported model type."""
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from chemsar.model import (
+from mlmolprop.model import (
     Model,
     ModelC,
     clus_uns,
@@ -152,7 +152,7 @@ def test_modelc_dl_actually_trains(clas_train_test):
     # the seed) and isn't what this bug actually affected.
     import keras
 
-    from chemsar.model import _build_dl_model
+    from mlmolprop.model import _build_dl_model
 
     X_train, y_train, X_test, y_test, v_names = clas_train_test
 

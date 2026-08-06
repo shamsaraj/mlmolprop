@@ -1,10 +1,10 @@
-"""Tests for chemsar.processing."""
+"""Tests for mlmolprop.processing."""
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from chemsar.processing import (
+from mlmolprop.processing import (
     SelectKBest_selector,
     VarianceThreshold_selector,
     average_bygroup,

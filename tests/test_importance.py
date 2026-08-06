@@ -1,9 +1,9 @@
-"""Tests for chemsar.importance."""
+"""Tests for mlmolprop.importance."""
 
 import pandas as pd
 import pytest
 
-from chemsar.importance import lime_explain, partial
+from mlmolprop.importance import lime_explain, partial
 
 
 def test_lime_explain_regression_mode(regression_xy):

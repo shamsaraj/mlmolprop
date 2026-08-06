@@ -1,8 +1,8 @@
-"""Tests for chemsar.descriptors."""
+"""Tests for mlmolprop.descriptors."""
 
 import pytest
 
-from chemsar.descriptors import CI, dataframe, desc, tanimoto
+from mlmolprop.descriptors import CI, dataframe, desc, tanimoto
 
 
 @pytest.mark.parametrize("selected_des", ["all", "positive", "interpretable"])

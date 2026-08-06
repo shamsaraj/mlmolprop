@@ -1,9 +1,9 @@
-"""Tests for chemsar.molprep."""
+"""Tests for mlmolprop.molprep."""
 
 import pytest
 from rdkit import Chem
 
-from chemsar.molprep import RDimage, mol_enumerate, mol_prep, moltosvg
+from mlmolprop.molprep import RDimage, mol_enumerate, mol_prep, moltosvg
 
 
 def test_moltosvg_produces_valid_svg():

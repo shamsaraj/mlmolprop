@@ -1,9 +1,9 @@
-"""Tests for chemsar.basic -- core QSAR statistics helpers."""
+"""Tests for mlmolprop.basic -- core QSAR statistics helpers."""
 
 import numpy as np
 import pytest
 
-from chemsar.basic import (
+from mlmolprop.basic import (
     RMSEP_CV_C,
     F,
     analyse,

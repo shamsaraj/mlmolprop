@@ -1,8 +1,8 @@
-"""Tests for chemsar.correlation."""
+"""Tests for mlmolprop.correlation."""
 
 import pytest
 
-from chemsar.correlation import find_correlation
+from mlmolprop.correlation import find_correlation
 
 
 def test_find_correlation_catches_positive_correlation(feature_frame):
