@@ -83,17 +83,24 @@ print(model_result[0])  # metrics dict
 ## Example Notebook
 
 [`examples/quickstart.ipynb`](examples/quickstart.ipynb) runs the full pipeline
-above end-to-end against a small set of real molecules with a synthetic
-activity value, then goes further:
+above end-to-end against
+[`examples/data/esol_subset.csv`](examples/data/esol_subset.csv), a
+70-compound sample of the real, measured **ESOL/Delaney aqueous solubility
+dataset**, then goes further:
 
 - molecule preparation → descriptors → dataset processing → model training → evaluation
 - algorithm comparison across several regressor types
-- hyperparameter search over a random forest's `c` argument
+- a combined hyperparameter + feature-selection grid search, with a heatmap
+  of the results
+- refit and diagnostics (predicted-vs-observed, residuals) for the model
+  that actually won the search, not just an arbitrary starting guess
 - feature importance: variable importance + partial dependence
 - LIME: explaining a single molecule's prediction
 - 2D structure depictions, including substructure highlighting
-- classification with a small Keras deep-learning model, with automatic
-  confusion-matrix visualization
+- a low-dimensional (PCA) map colored by measured activity, and a
+  K-means clustering map
+- classification, with confusion matrices for the best-by-CV classifier
+  and for a small Keras deep-learning model
 
 Open it with `jupyter notebook` after installing (the `notebook`/`nbconvert`
 dev tools are included in `environment.yml`).
