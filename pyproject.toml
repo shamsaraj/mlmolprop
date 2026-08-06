@@ -13,20 +13,38 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = [
-  "numpy",
-  "pandas",
-  "matplotlib",
-  "scikit-learn",
-  "scipy",
-  "rdkit",
-  "reportlab",
-  "svglib",
-  "keras",
-  "tensorflow",
-  "lime",
+  # Lower bounds are the versions this was actually tested against
+  # (see environment.yml); no upper bounds unless a real incompatibility
+  # is found, so this doesn't fight other packages' version requirements.
+  "numpy>=2.5",
+  "pandas>=3.0",
+  "matplotlib>=3.10",
+  "scikit-learn>=1.9",
+  "scipy>=1.18",
+  "rdkit>=2025.9.5",
+  "reportlab>=5.0",
+  "svglib>=2.1",
+  "keras>=3.15",
+  "tensorflow>=2.18",
+  "lime>=0.2",
 ]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
 
 [project.urls]
 "Homepage" = "https://github.com/shamsaraj/Chem_ML"
 "Bug Tracker" = "https://github.com/shamsaraj/Chem_ML/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: exercises heavier code paths (e.g. training a Keras model); still run by default, but filterable with `-m \"not slow\"`.",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests intentionally unpack full return tuples to document a function's
+# return shape at the call site, even when a given test only asserts on
+# part of it.
+"tests/*" = ["RUF059"]
 

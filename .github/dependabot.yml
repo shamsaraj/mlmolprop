@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Bumps minimum-version floors in pyproject.toml's dependencies when a
+  # new release comes out. Each PR triggers the test workflow, so a bump
+  # only merges cleanly if it doesn't break anything.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+
+  # Keeps the GitHub Actions used in .github/workflows/ (e.g.
+  # actions/checkout, conda-incubator/setup-miniconda) up to date.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
