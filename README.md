@@ -1,30 +1,30 @@
-# Chem_ML — Cheminformatics & QSAR Modeling Toolkit
+# chemsar — Cheminformatics & QSAR Modeling Toolkit
 
-**Chem_ML** is a modular Python framework for cheminformatics and QSAR (Quantitative Structure–Activity Relationship) modeling.  
+**chemsar** is a modular Python framework for cheminformatics and QSAR (Quantitative Structure–Activity Relationship) modeling.
 It enables molecular descriptor generation, fingerprint computation, dataset preprocessing, feature selection, and machine learning analysis — all within one workflow.
 
-This toolkit integrates **RDKit**, **Scikit-learn**, **LIME**, and **matplotlib** to streamline molecular data preparation, model building, and interpretation.
+This toolkit integrates **RDKit**, **scikit-learn**, **Keras/TensorFlow**, **LIME**, and **matplotlib** to streamline molecular data preparation, model building, and interpretation.
 
 ---
 
 ## Project Structure
 
-| File | Description |
-|------|--------------|
-| **basic.py** | Core mathematical/statistical helper functions (PRESS, R², RMSE, F-test, etc.). |
+| Module | Description |
+|--------|--------------|
+| **basic.py** | Core statistics helpers for QSAR model evaluation (PRESS, R², Q², RMSE, F-statistic, etc.). |
 | **correlation.py** | Detects and removes highly correlated features from datasets. |
-| **processing.py** | Handles dataset preprocessing — scaling, normalization, feature selection, correlation filtering, and dataset splitting. |
+| **processing.py** | Dataset preprocessing — imputation, scaling, normalization, feature selection, correlation filtering, and train/test splitting. |
 | **fingerprint.py** | Generates molecular fingerprints (ECFP, MACCS, Avalon, RDKit, etc.) using RDKit. |
 | **descriptors.py** | Computes molecular descriptors, merges with activity data, and exports QSAR-ready datasets. |
-| **molprep.py** | Prepares molecular structures (SDF/SMILES): 3D embedding, salt removal, charge calculation, and image generation. |
-| **model.py** | Builds regression and classification models (PLS, Random Forest, SVM, Neural Networks, Deep Learning, etc.) and evaluates their performance. |
-| **importance.py** | Explains model predictions using interpretability methods (LIME, TreeInterpreter, Partial Dependence). |
-| **image.py** | Processes and augments molecular structure images and converts them into numerical datasets. |
-| **plots.py** | Creates histograms, scatter plots, ROC curves, and other visualization outputs. |
+| **molprep.py** | Prepares molecular structures (SDF/SMILES): salt removal, 3D embedding, charge calculation, and image generation. |
+| **model.py** | Fits and evaluates regression/classification models (PLS, Random Forest, SVM, MLP, a small Keras deep-learning classifier, etc.). |
+| **importance.py** | Explains model predictions with LIME, and partial dependence plots. |
+| **image.py** | Converts molecule/data images to on-disk artifacts (PNG, CSV, SVG). |
+| **plots.py** | Scatter/histogram/2D-histogram/ROC grid plots of a feature set vs. a target. |
 
 ---
 
-## ⚙️ Installation
+## Installation
 
 Clone the repository:
 ```bash
@@ -32,73 +32,83 @@ git clone https://github.com/shamsaraj/Chem_ML.git
 cd Chem_ML
 ```
 
-Install the dependencies:
+Create the environment (conda, recommended):
 ```bash
+conda env create -f environment.yml
+conda activate chemsar
+```
 
-pip install rdkit scikit-learn matplotlib numpy pandas lime keras svglib
+Or install directly with pip:
+```bash
+pip install -e .
 ```
 
 ---
 
 ## Usage Overview
 
-### 1️⃣ Prepare Molecules
+### 1. Prepare Molecules
 ```python
-from modules.molprep import mol_enumerate
+from chemsar import mol_enumerate
+
 molecules = mol_enumerate("input.sdf", "prepared_3d.sdf", "prepared_2d.sdf")
 ```
 
-### 2️⃣ Generate Descriptors or Fingerprints
+### 2. Generate Descriptors
 ```python
-from modules.descriptors import desc, dataframe
-desc_data = desc("prepared_3d.sdf", type="sdf")
+from chemsar import desc, dataframe
+
+desc_data = desc(molecules, source="molecule")
 merged = dataframe(desc_data, "activity.csv", "merged.csv")
 ```
 
-### 3️⃣ Process Dataset
+### 3. Process Dataset
 ```python
-from modules.processing import data_prep
-set = data_prep("merged.csv", Scaled="on", FS="reg", Cor="on", mod="reg")
+from chemsar import data_prep
+
+result = data_prep("merged.csv", Scaled="on", FS="reg", Cor="on", mod="reg")
 ```
 
-### 4️⃣ Build and Evaluate Models
+### 4. Build and Evaluate Models
 ```python
-from modules.model import Model
-result = Model(set[0], set[1], set[2], set[3], set[4], M="rf")
-print(result[0])  # model summary and metrics
+from chemsar import Model
+
+X_train, y_train, X_test, y_test, v_names = result[:5]
+model_result = Model(X_train, y_train, X_test, y_test, v_names, M="rf")
+print(model_result[0])  # metrics dict
 ```
 
 ---
 
 ## Features
 
-✅ Molecular structure preparation (SMILES/SDF)  
-✅ Descriptor and fingerprint generation (ECFP, MACCS, Avalon, etc.)  
-✅ Data preprocessing, normalization, and feature selection  
-✅ Correlation filtering and variance thresholding  
-✅ Machine learning for regression and classification  
-✅ Model interpretation (LIME, Skater, TreeInterpreter)  
-✅ Visualization tools: PCA, ROC, histograms, clustering  
+- Molecular structure preparation (SMILES/SDF), salt removal, 3D embedding
+- Descriptor and fingerprint generation (ECFP, MACCS, Avalon, RDKit, etc.)
+- Data preprocessing: imputation, normalization, scaling, categorical encoding
+- Correlation filtering and variance thresholding
+- Machine learning for regression and classification, including a small Keras MLP
+- Model interpretation via LIME and partial dependence plots
+- Visualization: PCA, ROC, histograms, confusion matrices, clustering
 
 ---
 
 ## Example Workflow
 
-1. Prepare molecules  
-2. Generate descriptors  
-3. Process dataset  
-4. Train model  
-5. Interpret results  
+1. Prepare molecules
+2. Generate descriptors
+3. Process dataset
+4. Train model
+5. Interpret results
 
 ---
 
 ## Author
 
-**J. Shamsara**  
-🔗 [GitHub Profile](https://github.com/shamsaraj)
+**J. Shamsara**
+[GitHub Profile](https://github.com/shamsaraj)
 
 ---
 
-## 🧾 License
+## License
 
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
