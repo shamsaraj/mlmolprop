@@ -199,6 +199,17 @@ def test_clus_uns_pca_then_kmeans_then_pc_km_in_one_process(reg_train_test):
     clus_uns(X_train, y_binary, path="./", M="pc-km", n=2, n2=2)
 
 
+def test_clus_uns_pc_km_supports_n2_different_from_n(reg_train_test):
+    # regression guard: colors3 (used for KMeans cluster centers) was sized
+    # by `n` instead of `n2`, and M="kmeans"'s cluster-center scatter used a
+    # hardcoded 2-color list -- both crashed with a mismatched-length error
+    # from matplotlib as soon as n2 != n (or n2 != 2 for "kmeans"), e.g.
+    # n=2 with n2=3 clusters.
+    X_train, y_train, X_test, y_test, v_names = reg_train_test
+    y_binary = (y_train > y_train.median()).astype(int).values
+    clus_uns(X_train, y_binary, path="./", M="pc-km", n=2, n2=3)
+
+
 def test_rocc_uses_actual_label_param_not_hardcoded(rng):
     # regression guard: EF2/EF10/EF20/EF50 hardcoded l="b" instead of using
     # the actual `l` parameter (only EF1 used it correctly)

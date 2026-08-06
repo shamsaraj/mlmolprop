@@ -69,6 +69,14 @@ from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from .basic import RMSEP_CV_C, analyse, q2r2, r2test
 
 
+def _distinct_colors(count: int) -> list:
+    """Return `count` visually distinct colors from a qualitative colormap."""
+    cmap = (
+        matplotlib.colormaps["tab10"] if count <= 10 else matplotlib.colormaps["tab20"]
+    )
+    return [cmap(i) for i in range(count)]
+
+
 def clus_uns(
     x,
     y,
@@ -106,7 +114,11 @@ def clus_uns(
         Feature names and the two feature names to plot on the axes for
         M="kmeans" (ignored for "pca"/"pc-km").
     n2 : int, default 2
-        Number of KMeans clusters.
+        Number of KMeans clusters. For ``M="kmeans"``, the downstream
+        evaluation metrics (confusion matrix vs. ``y``/``ytest``,
+        sensitivity/specificity/etc. via :func:`metr`) assume binary
+        clustering and only work correctly for ``n2=2``; ``M="pc-km"``
+        (which skips that evaluation step) supports any ``n2``.
     """
     from sklearn import decomposition
     from sklearn.cluster import KMeans
@@ -114,10 +126,11 @@ def clus_uns(
     print(y)
     y1 = y
 
-    colorset = ["lime", "blue", "yellow", "red"]
-    colors2 = colorset[0:n]
-    colors3 = colorset[0:n]
-    colors3.reverse()
+    # colors2 covers the y1/predicted-label classes (sized by `n`); colors3
+    # covers the KMeans cluster centers, which must be sized by `n2` (the
+    # actual number of clusters) -- these can legitimately differ.
+    colors2 = _distinct_colors(n)
+    colors3 = _distinct_colors(n2)[::-1]
 
     if M == "pca" or M == "pc-km":
         np.random.seed(1)
@@ -218,7 +231,7 @@ def clus_uns(
             plt.scatter(
                 centers[:, va],
                 centers[:, vb],
-                c=["darkblue", "darkgreen"],
+                c=colors3,
                 s=300,
                 alpha=1,
                 marker="P",
@@ -238,7 +251,7 @@ def clus_uns(
             plt.scatter(
                 centers[:, va],
                 centers[:, vb],
-                c=["darkblue", "darkgreen"],
+                c=colors3,
                 s=300,
                 alpha=1,
                 marker="P",
@@ -274,14 +287,18 @@ def clus_uns(
             )
             plt.show()
 
-        cnf = confusion_matrix(y1, labels)
-        tp, fp, fn, tn = cnf.ravel()
-        cnf[0][0] = tp
-        cnf[1][1] = tn
-        cnf[0][1] = fn
-        cnf[1][0] = fp
-
         if M == "kmeans":
+            # Only "kmeans" actually uses this confusion matrix (plotted
+            # below); computing it unconditionally for "pc-km" too was dead
+            # work that also assumed exactly 2 clusters (cnf.ravel() into
+            # tp/fp/fn/tn), crashing for any other n2.
+            cnf = confusion_matrix(y1, labels)
+            tp, fp, fn, tn = cnf.ravel()
+            cnf[0][0] = tp
+            cnf[1][1] = tn
+            cnf[0][1] = fn
+            cnf[1][0] = fp
+
             ytest_labels = kmeans.predict(xtest)
             ytest_labelslist = ytest_labels.tolist()
             if ytest_labelslist.count(1) <= len(ytest_labels) / 2:
