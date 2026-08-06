@@ -80,6 +80,17 @@ print(model_result[0])  # metrics dict
 
 ---
 
+## Example Notebook
+
+[`examples/quickstart.ipynb`](examples/quickstart.ipynb) runs the full pipeline
+above end-to-end against a small set of real molecules with a synthetic
+activity value: molecule preparation → descriptors → dataset processing →
+model training → evaluation plots. Open it with `jupyter notebook` after
+installing (the `notebook`/`nbconvert` dev tools are included in
+`environment.yml`).
+
+---
+
 ## Features
 
 - Molecular structure preparation (SMILES/SDF), salt removal, 3D embedding

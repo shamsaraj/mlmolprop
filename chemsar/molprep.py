@@ -78,7 +78,7 @@ def mol_prep(mol):
 def _load_molecules(moleculesfile, input_format: str, delimiter: str):
     if input_format == "sdf":
         with rdkit.Chem.SDMolSupplier(moleculesfile) as suppl:
-            return list(suppl)
+            return [mol for mol in suppl]
     if input_format == "smi":
         suppl = rdkit.Chem.SmilesMolSupplier(
             moleculesfile,
@@ -87,7 +87,10 @@ def _load_molecules(moleculesfile, input_format: str, delimiter: str):
             smilesColumn=0,
             nameColumn=1,
         )
-        return list(suppl)
+        # NOTE: list(suppl) silently returns [] for SmilesMolSupplier in
+        # some RDKit versions (confirmed: len(suppl) and a plain `for`
+        # loop both work, list(suppl) does not) -- iterate explicitly.
+        return [mol for mol in suppl]
     raise ValueError(
         f"input_format must be one of {sorted(_VALID_FORMATS)}, got {input_format!r}"
     )
