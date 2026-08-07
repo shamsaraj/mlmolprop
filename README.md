@@ -28,8 +28,8 @@ This toolkit integrates **RDKit**, **scikit-learn**, **Keras/TensorFlow**, **LIM
 
 Clone the repository:
 ```bash
-git clone https://github.com/shamsaraj/Chem_ML.git
-cd Chem_ML
+git clone https://github.com/shamsaraj/mlmolprop.git
+cd mlmolprop
 ```
 
 Create the environment (conda, recommended):
