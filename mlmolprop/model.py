@@ -293,7 +293,11 @@ def clus_uns(
             # work that also assumed exactly 2 clusters (cnf.ravel() into
             # tp/fp/fn/tn), crashing for any other n2.
             cnf = confusion_matrix(y1, labels)
-            tp, fp, fn, tn = cnf.ravel()
+            # sklearn's confusion_matrix(...).ravel() for binary labels [0, 1]
+            # returns [tn, fp, fn, tp] -- NOT [tp, fp, fn, tn]. Unpacking in
+            # the wrong order silently swaps which count is called "tp" vs
+            # "tn" (fp/fn happen to land correctly, same position either way).
+            tn, fp, fn, tp = cnf.ravel()
             cnf[0][0] = tp
             cnf[1][1] = tn
             cnf[0][1] = fn
@@ -309,7 +313,7 @@ def clus_uns(
                         ytest_labels[i] = 1
 
             cnf3 = confusion_matrix(ytest, ytest_labels)
-            tpt, fpt, fnt, tnt = cnf3.ravel()
+            tnt, fpt, fnt, tpt = cnf3.ravel()
             cnf3[0][0] = tpt
             cnf3[1][1] = tnt
             cnf3[0][1] = fnt
@@ -919,17 +923,25 @@ def ModelC(
 
     # Binary classification only: reorder the 2x2 confusion matrix so
     # cnf[0][0]/[1][1] are TP/TN and cnf[0][1]/[1][0] are FN/FP.
-    tp, fp, fn, tn = cnf.ravel()
+    #
+    # sklearn's confusion_matrix(...).ravel() for binary labels [0, 1] returns
+    # [tn, fp, fn, tp] -- NOT [tp, fp, fn, tn]. Unpacking in the wrong order
+    # silently swaps which count is called "tp" vs "tn" below (fp/fn happen
+    # to land correctly, same position either way); every metr() call fed by
+    # these was reporting swapped sensitivity/specificity/precision/F as a
+    # result, even though accuracy and MCC are symmetric under the swap and
+    # so came out right regardless.
+    tn, fp, fn, tp = cnf.ravel()
     cnf[0][0] = tp
     cnf[1][1] = tn
     cnf[0][1] = fn
     cnf[1][0] = fp
-    tpt, fpt, fnt, tnt = cnf2.ravel()
+    tnt, fpt, fnt, tpt = cnf2.ravel()
     cnf2[0][0] = tpt
     cnf2[1][1] = tnt
     cnf2[0][1] = fnt
     cnf2[1][0] = fpt
-    tpc, fpc, fnc, tnc = cnf3.ravel()
+    tnc, fpc, fnc, tpc = cnf3.ravel()
     cnf3[0][0] = tpc
     cnf3[1][1] = tnc
     cnf3[0][1] = fnc
@@ -941,17 +953,17 @@ def ModelC(
     total = metr(tpt + tp, tnt + tn, fpt + fp, fnt + fn)
 
     plt.figure()
-    plot_confusion_matrix(cnf, classes=["Inactive", "Active"], title="Train set")
+    plot_confusion_matrix(cnf, classes=["Active", "Inactive"], title="Train set")
     plt.ylabel("Predicted", fontsize=12, fontweight="bold")
     plt.xlabel("Actual", fontsize=12, fontweight="bold")
     plt.figure()
     plot_confusion_matrix(
-        cnf3, classes=["Inactive", "Active"], title="Cross-Validation"
+        cnf3, classes=["Active", "Inactive"], title="Cross-Validation"
     )
     plt.ylabel("Predicted", fontsize=12, fontweight="bold")
     plt.xlabel("Actual", fontsize=12, fontweight="bold")
     plt.figure()
-    plot_confusion_matrix(cnf2, classes=["Inactive", "Active"], title="Test set")
+    plot_confusion_matrix(cnf2, classes=["Active", "Inactive"], title="Test set")
     plt.ylabel("Predicted", fontsize=12, fontweight="bold")
     plt.xlabel("Actual", fontsize=12, fontweight="bold")
 

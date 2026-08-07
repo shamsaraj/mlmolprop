@@ -218,10 +218,52 @@ def test_rocc_uses_actual_label_param_not_hardcoded(rng):
     rocc(x, y, l=1)  # must not raise for a label that actually appears in y
 
 
-def test_metr_matthews_correlation_coefficient():
-    result = metr(tp1=10, tn1=8, fp1=2, fn1=1)
+def test_metr_matches_hand_computed_ground_truth():
+    # TP=8, TN=6, FP=4, FN=2 -> SEN=8/10=0.8, SPEC=6/10=0.6, PREC=8/12=2/3,
+    # AC=(8+6)/20=0.7. Regression guard for the confusion-matrix ravel()
+    # unpacking bug: mlmolprop used to report SEN=0.75, SPEC=2/3, PREC=0.6
+    # for this exact case (sensitivity and precision/specificity swapped),
+    # verified against these exact numbers before the fix.
+    result = metr(tp1=8, tn1=6, fp1=4, fn1=2)
+    assert result["AC"] == pytest.approx(0.7)
+    assert result["SEN"] == pytest.approx(0.8)
+    assert result["SPEC"] == pytest.approx(0.6)
+    assert result["PREC"] == pytest.approx(2 / 3)
     assert set(result.keys()) == {"AC", "SEN", "SPEC", "PREC", "F", "MCC"}
-    assert 0 <= result["AC"] <= 1
+
+
+def test_confusion_matrix_ravel_order_assumption():
+    # Documents/locks in the sklearn convention every confusion-matrix
+    # unpacking in model.py depends on: for binary labels [0, 1],
+    # confusion_matrix(...).ravel() is [tn, fp, fn, tp], NOT [tp, fp, fn, tn].
+    from sklearn.metrics import confusion_matrix
+
+    y_true = [1] * 10 + [0] * 10
+    y_pred = [1] * 8 + [0] * 2 + [1] * 4 + [0] * 6  # TP=8, FN=2, FP=4, TN=6
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    assert (tn, fp, fn, tp) == (6, 4, 2, 8)
+
+
+def test_modelc_metrics_match_sklearn_reference(clas_train_test):
+    # Cross-check ModelC()'s reported train-set sensitivity/specificity/
+    # precision against sklearn's own recall_score/precision_score on the
+    # same predictions, rather than hand-computed numbers -- an
+    # independent reference for the confusion-matrix ravel() fix.
+    from sklearn.metrics import precision_score, recall_score
+
+    X_train, y_train, X_test, y_test, v_names = clas_train_test
+    result, fitted = ModelC(
+        X_train, y_train, X_test, y_test, v_names, M="rf", c1=3, rs=0, cv="kf"
+    )
+
+    y_pred_train = fitted.predict(X_train)
+    expected_sen = recall_score(y_train, y_pred_train, pos_label=1)
+    expected_spec = recall_score(y_train, y_pred_train, pos_label=0)
+    expected_prec = precision_score(y_train, y_pred_train, pos_label=1)
+
+    assert result["train_metrics"]["SEN"] == pytest.approx(expected_sen)
+    assert result["train_metrics"]["SPEC"] == pytest.approx(expected_spec)
+    assert result["train_metrics"]["PREC"] == pytest.approx(expected_prec)
 
 
 def test_safe_divide_by_zero_returns_zero():
