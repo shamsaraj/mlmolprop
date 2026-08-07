@@ -328,7 +328,7 @@ def clus_uns(
             plt.show()
 
 
-def Model(x, y, xtest, ytest, v_names, c=10, M="mlr", rs=None, cv="loo"):
+def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo"):
     """Fit a regression model and evaluate it on train/test/cross-validation.
 
     Parameters
@@ -337,10 +337,17 @@ def Model(x, y, xtest, ytest, v_names, c=10, M="mlr", rs=None, cv="loo"):
     xtest, ytest : held-out feature matrix and target.
     v_names : list[str]
         Feature names (used for variable-importance reporting).
-    c : int, default 10
-        Model-specific hyperparameter (n_components for "pls",
-        n_estimators/max_depth for "rf", C for "svm", max_depth for
-        "tree", ...).
+    params : dict or None
+        Model-specific hyperparameters, passed straight through as
+        keyword arguments to the underlying scikit-learn estimator's
+        constructor (layered on top of per-model defaults chosen to
+        match this function's previous fixed behavior) -- e.g.
+        ``{"n_estimators": 200, "max_depth": 8, "max_features": 5}``
+        for M="rf", or ``{"n_components": 5}`` for M="pls". Any keyword
+        the real estimator accepts works, which is what makes this
+        usable as a generic hyperparameter-search wrapper across model
+        families: build a per-model param grid using scikit-learn's own
+        parameter names, no per-model translation layer needed.
     M : str, default "mlr"
         Which regressor to fit. One of: pls, mlr, rf, svm, lsvm, lasso,
         nn, tree, rg, el, la, ll, or, brg, ardr, ransa, the, hub, sgdr,
@@ -362,100 +369,96 @@ def Model(x, y, xtest, ytest, v_names, c=10, M="mlr", rs=None, cv="loo"):
     ypreds = []
     X_array = np.array(x)
     y_array = np.array(y)
+    p = dict(params or {})
 
     if M == "pls":
-        model = PLSRegression(n_components=c)
-        model2 = PLSRegression(n_components=c)
+        mp = {"n_components": 10, **p}
+        model = PLSRegression(**mp)
+        model2 = PLSRegression(**mp)
     elif M == "mlr":
-        model = LinearRegression()
-        model2 = LinearRegression()
+        model = LinearRegression(**p)
+        model2 = LinearRegression(**p)
     elif M == "rf":
-        model = RandomForestRegressor(
-            n_estimators=c, max_depth=c - 1, random_state=rs, max_features=c
-        )
-        model2 = RandomForestRegressor(
-            n_estimators=c, max_depth=c - 1, random_state=rs, max_features=c
-        )
+        mp = {"n_estimators": 10, "max_depth": 9, "max_features": 10, **p}
+        model = RandomForestRegressor(random_state=rs, **mp)
+        model2 = RandomForestRegressor(random_state=rs, **mp)
     elif M == "svm":
-        model = SVR(kernel="rbf", gamma="auto", C=c)
-        model2 = SVR(kernel="rbf", gamma="auto", C=c)
+        mp = {"C": 10, "kernel": "rbf", "gamma": "auto", **p}
+        model = SVR(**mp)
+        model2 = SVR(**mp)
     elif M == "lsvm":
-        model = LinearSVR(random_state=rs)
-        model2 = LinearSVR(random_state=rs)
+        model = LinearSVR(random_state=rs, **p)
+        model2 = LinearSVR(random_state=rs, **p)
     elif M == "lasso":
-        model = Lasso(alpha=0.1, random_state=rs)
-        model2 = Lasso(alpha=0.1, random_state=rs)
+        mp = {"alpha": 0.1, **p}
+        model = Lasso(random_state=rs, **mp)
+        model2 = Lasso(random_state=rs, **mp)
     elif M == "nn":
-        model = MLPRegressor(
-            max_iter=200,
-            hidden_layer_sizes=[20, 10, 10],
-            random_state=rs,
-            warm_start=False,
-            alpha=0.0001,
-            solver="adam",
-        )
-        model2 = MLPRegressor(
-            max_iter=200,
-            hidden_layer_sizes=[20, 10, 10],
-            random_state=rs,
-            warm_start=False,
-            alpha=0.0001,
-            solver="adam",
-        )
+        mp = {
+            "max_iter": 200,
+            "hidden_layer_sizes": [20, 10, 10],
+            "alpha": 0.0001,
+            "solver": "adam",
+            "warm_start": False,
+            **p,
+        }
+        model = MLPRegressor(random_state=rs, **mp)
+        model2 = MLPRegressor(random_state=rs, **mp)
     elif M == "tree":
-        model = DecisionTreeRegressor(max_depth=c, max_features=c + 1, random_state=rs)
-        model2 = DecisionTreeRegressor(max_depth=c, max_features=c + 1, random_state=rs)
+        mp = {"max_depth": 10, "max_features": 11, **p}
+        model = DecisionTreeRegressor(random_state=rs, **mp)
+        model2 = DecisionTreeRegressor(random_state=rs, **mp)
     elif M == "rg":
-        model = Ridge(random_state=rs)
-        model2 = Ridge(random_state=rs)
+        model = Ridge(random_state=rs, **p)
+        model2 = Ridge(random_state=rs, **p)
     elif M == "el":
-        model = ElasticNet(random_state=rs)
-        model2 = ElasticNet(random_state=rs)
+        model = ElasticNet(random_state=rs, **p)
+        model2 = ElasticNet(random_state=rs, **p)
     elif M == "la":
-        model = Lars()
-        model2 = Lars()
+        model = Lars(**p)
+        model2 = Lars(**p)
     elif M == "ll":
-        model = LassoLars()
-        model2 = LassoLars()
+        model = LassoLars(**p)
+        model2 = LassoLars(**p)
     elif M == "or":
-        model = OrthogonalMatchingPursuit()
-        model2 = OrthogonalMatchingPursuit()
+        model = OrthogonalMatchingPursuit(**p)
+        model2 = OrthogonalMatchingPursuit(**p)
     elif M == "brg":
-        model = BayesianRidge()
-        model2 = BayesianRidge()
+        model = BayesianRidge(**p)
+        model2 = BayesianRidge(**p)
     elif M == "ardr":
-        model = ARDRegression()
-        model2 = ARDRegression()
+        model = ARDRegression(**p)
+        model2 = ARDRegression(**p)
     elif M == "ransa":
-        model = RANSACRegressor(random_state=rs)
-        model2 = RANSACRegressor(random_state=rs)
+        model = RANSACRegressor(random_state=rs, **p)
+        model2 = RANSACRegressor(random_state=rs, **p)
     elif M == "the":
-        model = TheilSenRegressor(random_state=rs)
-        model2 = TheilSenRegressor(random_state=rs)
+        model = TheilSenRegressor(random_state=rs, **p)
+        model2 = TheilSenRegressor(random_state=rs, **p)
     elif M == "hub":
-        model = HuberRegressor()
-        model2 = HuberRegressor()
+        model = HuberRegressor(**p)
+        model2 = HuberRegressor(**p)
     elif M == "sgdr":
-        model = SGDRegressor(random_state=rs)
-        model2 = SGDRegressor(random_state=rs)
+        model = SGDRegressor(random_state=rs, **p)
+        model2 = SGDRegressor(random_state=rs, **p)
     elif M == "kn":
-        model = KNeighborsRegressor()
-        model2 = KNeighborsRegressor()
+        model = KNeighborsRegressor(**p)
+        model2 = KNeighborsRegressor(**p)
     elif M == "gu":
-        model = GaussianProcessRegressor(random_state=rs)
-        model2 = GaussianProcessRegressor(random_state=rs)
+        model = GaussianProcessRegressor(random_state=rs, **p)
+        model2 = GaussianProcessRegressor(random_state=rs, **p)
     elif M == "ex":
-        model = ExtraTreesRegressor(random_state=rs)
-        model2 = ExtraTreesRegressor(random_state=rs)
+        model = ExtraTreesRegressor(random_state=rs, **p)
+        model2 = ExtraTreesRegressor(random_state=rs, **p)
     elif M == "bg":
-        model = BaggingRegressor(random_state=rs)
-        model2 = BaggingRegressor(random_state=rs)
+        model = BaggingRegressor(random_state=rs, **p)
+        model2 = BaggingRegressor(random_state=rs, **p)
     elif M == "gb":
-        model = GradientBoostingRegressor(random_state=rs)
-        model2 = GradientBoostingRegressor(random_state=rs)
+        model = GradientBoostingRegressor(random_state=rs, **p)
+        model2 = GradientBoostingRegressor(random_state=rs, **p)
     elif M == "ada":
-        model = AdaBoostRegressor(random_state=rs)
-        model2 = AdaBoostRegressor(random_state=rs)
+        model = AdaBoostRegressor(random_state=rs, **p)
+        model2 = AdaBoostRegressor(random_state=rs, **p)
     else:
         raise ValueError(f"unknown model name M={M!r}")
 
@@ -549,22 +552,26 @@ def Model(x, y, xtest, ytest, v_names, c=10, M="mlr", rs=None, cv="loo"):
     return [result, List, model, analysis]
 
 
-def _build_dl_model(n_features, dl2, dp, omp, lr1, nesterov):
+def _build_dl_model(
+    n_features, hidden_layer_sizes, dropout, optimizer, learning_rate, nesterov
+):
     from keras import Sequential, optimizers
     from keras.layers import Dense, Dropout, Input
 
     model = Sequential()
     model.add(Input(shape=(n_features,)))
-    for units in dl2:
+    for units in hidden_layer_sizes:
         model.add(Dense(units, kernel_initializer="uniform", activation="relu"))
-        model.add(Dropout(dp))
+        model.add(Dropout(dropout))
     model.add(Dense(1, kernel_initializer="normal", activation="sigmoid"))
 
-    if omp == "sgd":
-        optimizer = optimizers.SGD(learning_rate=lr1, momentum=0.9, nesterov=nesterov)
+    if optimizer == "sgd":
+        opt = optimizers.SGD(
+            learning_rate=learning_rate, momentum=0.9, nesterov=nesterov
+        )
     else:
-        optimizer = optimizers.Adam(learning_rate=lr1)
-    model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
+        opt = optimizers.Adam(learning_rate=learning_rate)
+    model.compile(loss="binary_crossentropy", optimizer=opt, metrics=["accuracy"])
     return model
 
 
@@ -574,23 +581,10 @@ def ModelC(
     xtest,
     ytest,
     v_names,
-    c1=10,
+    params=None,
     M="tree",
     rs=None,
     cv="loo",
-    c2=10,
-    c3="rbf",
-    c5=200,
-    ep=300,
-    dl2=(500, 1000),
-    lr1=0.01,
-    nesterov=True,
-    omp="adam",
-    dp=0.2,
-    bs=16,
-    c4="adam",
-    grid=False,
-    weights="balanced",
 ):
     """Fit a binary classifier and evaluate it on train/test/cross-validation.
 
@@ -607,12 +601,19 @@ def ModelC(
         models and aren't offered here -- see Model() for those.)
     cv : {"loo", "kf", "kfr", "shuff"}
         Cross-validation strategy for the CV-based accuracy report.
-    c1, c2, c3, c5, weights
-        Model-specific hyperparameters (see the branch for each `M`).
-    ep, dl2, lr1, nesterov, omp, dp, bs
-        Hyperparameters for M="dl": epochs, hidden layer sizes, learning
-        rate, SGD nesterov momentum, optimizer ("adam"/"sgd"), dropout
-        rate, batch size.
+    params : dict or None
+        Model-specific hyperparameters, passed straight through as
+        keyword arguments to the underlying scikit-learn estimator's
+        constructor (layered on top of per-model defaults chosen to
+        match this function's previous fixed behavior) -- e.g.
+        ``{"max_depth": 8, "n_estimators": 200}`` for M="rf", or
+        ``{"C": 5, "kernel": "linear"}`` for M="svm". ``class_weight``
+        is a recognized key for every model that supports it (rf,
+        lsvm, svm, lr). For M="dl" (the Keras MLP, which has no
+        scikit-learn constructor), the recognized keys are instead
+        ``epochs``, ``hidden_layer_sizes``, ``learning_rate``,
+        ``nesterov``, ``optimizer`` ("adam"/"sgd"), ``dropout``, and
+        ``batch_size``.
 
     Returns
     -------
@@ -623,121 +624,129 @@ def ModelC(
     ypreds = []
     X_array = np.array(x)
     y_array = np.array(y)
+    p = dict(params or {})
+    svm_kernel = p.get("kernel", "rbf")
 
     if M == "tree":
-        model = DecisionTreeClassifier(random_state=rs, max_depth=c1, max_features=c2)
-        model2 = DecisionTreeClassifier(random_state=rs, max_depth=c1, max_features=c2)
+        mp = {"max_depth": 10, "max_features": 10, **p}
+        model = DecisionTreeClassifier(random_state=rs, **mp)
+        model2 = DecisionTreeClassifier(random_state=rs, **mp)
     elif M == "nn":
-        model = MLPClassifier(
-            solver=c4,
-            alpha=0.0001,
-            hidden_layer_sizes=(c1, c1, c1),
-            random_state=rs,
-            max_iter=c5,
-        )
-        model2 = MLPClassifier(
-            solver=c4,
-            alpha=1e-4,
-            hidden_layer_sizes=(c1, c1, c1),
-            random_state=rs,
-            max_iter=c5,
-        )
+        mp = {
+            "solver": "adam",
+            "alpha": 0.0001,
+            "hidden_layer_sizes": (10, 10, 10),
+            "max_iter": 200,
+            **p,
+        }
+        model = MLPClassifier(random_state=rs, **mp)
+        model2 = MLPClassifier(random_state=rs, **mp)
     elif M == "rf":
-        model = RandomForestClassifier(
-            max_depth=c1,
-            n_estimators=c1 * 2,
-            random_state=rs,
-            max_features="sqrt",
-            max_leaf_nodes=None,
-            class_weight=weights,
-        )
-        model2 = RandomForestClassifier(
-            max_depth=c1,
-            n_estimators=c1 * 2,
-            random_state=rs,
-            max_features="sqrt",
-            max_leaf_nodes=None,
-            class_weight=weights,
-        )
+        mp = {
+            "max_depth": 10,
+            "n_estimators": 20,
+            "max_features": "sqrt",
+            "max_leaf_nodes": None,
+            "class_weight": "balanced",
+            **p,
+        }
+        model = RandomForestClassifier(random_state=rs, **mp)
+        model2 = RandomForestClassifier(random_state=rs, **mp)
     elif M == "ex":
-        model = ExtraTreesClassifier(max_depth=c1, random_state=rs)
-        model2 = ExtraTreesClassifier(max_depth=c1, random_state=rs)
+        mp = {"max_depth": 10, **p}
+        model = ExtraTreesClassifier(random_state=rs, **mp)
+        model2 = ExtraTreesClassifier(random_state=rs, **mp)
     elif M == "lsvm":
-        model = LinearSVC(class_weight=weights, C=c1, random_state=rs)
-        model2 = LinearSVC(class_weight=weights, C=c1, random_state=rs)
+        mp = {"C": 10, "class_weight": "balanced", **p}
+        model = LinearSVC(random_state=rs, **mp)
+        model2 = LinearSVC(random_state=rs, **mp)
     elif M == "svm":
-        model = SVC(
-            class_weight=weights,
-            random_state=rs,
-            probability=True,
-            C=c1,
-            kernel=c3,
-            max_iter=c5,
-            gamma=c2,
-        )
-        model2 = SVC(
-            class_weight=weights,
-            random_state=rs,
-            probability=True,
-            C=c1,
-            kernel=c3,
-            max_iter=c5,
-            gamma=c2,
-        )
+        # probability=True is required for the predict_proba() calls
+        # this function makes later on -- not exposed as a tunable key.
+        mp = {
+            "C": 10,
+            "kernel": "rbf",
+            "max_iter": 200,
+            "gamma": 10,
+            "class_weight": "balanced",
+            **p,
+        }
+        model = SVC(random_state=rs, probability=True, **mp)
+        model2 = SVC(random_state=rs, probability=True, **mp)
     elif M == "lr":
-        model = LogisticRegression(max_iter=c1, random_state=rs, class_weight=weights)
-        model2 = LogisticRegression(max_iter=c1, random_state=rs, class_weight=weights)
+        mp = {"max_iter": 10, "class_weight": "balanced", **p}
+        model = LogisticRegression(random_state=rs, **mp)
+        model2 = LogisticRegression(random_state=rs, **mp)
     elif M == "ld":
-        model = LinearDiscriminantAnalysis()
-        model2 = LinearDiscriminantAnalysis()
+        model = LinearDiscriminantAnalysis(**p)
+        model2 = LinearDiscriminantAnalysis(**p)
     elif M == "rg":
-        model = RidgeClassifier(random_state=rs)
-        model2 = RidgeClassifier(random_state=rs)
+        model = RidgeClassifier(random_state=rs, **p)
+        model2 = RidgeClassifier(random_state=rs, **p)
     elif M == "per":
-        model = Perceptron(random_state=rs)
-        model2 = Perceptron(random_state=rs)
+        model = Perceptron(random_state=rs, **p)
+        model2 = Perceptron(random_state=rs, **p)
     elif M == "pass":
-        model = PassiveAggressiveClassifier(random_state=rs)
-        model2 = PassiveAggressiveClassifier(random_state=rs)
+        model = PassiveAggressiveClassifier(random_state=rs, **p)
+        model2 = PassiveAggressiveClassifier(random_state=rs, **p)
     elif M == "qua":
-        model = QuadraticDiscriminantAnalysis()
-        model2 = QuadraticDiscriminantAnalysis()
+        model = QuadraticDiscriminantAnalysis(**p)
+        model2 = QuadraticDiscriminantAnalysis(**p)
     elif M == "sgdc":
-        model = SGDClassifier(random_state=rs)
-        model2 = SGDClassifier(random_state=rs)
+        model = SGDClassifier(random_state=rs, **p)
+        model2 = SGDClassifier(random_state=rs, **p)
     elif M == "kn":
-        model = KNeighborsClassifier(n_neighbors=c1)
-        model2 = KNeighborsClassifier(n_neighbors=c1)
+        mp = {"n_neighbors": 10, **p}
+        model = KNeighborsClassifier(**mp)
+        model2 = KNeighborsClassifier(**mp)
     elif M == "rn":
-        model = RadiusNeighborsClassifier()
-        model2 = RadiusNeighborsClassifier()
+        model = RadiusNeighborsClassifier(**p)
+        model2 = RadiusNeighborsClassifier(**p)
     elif M == "gu":
-        model = GaussianProcessClassifier(random_state=rs)
-        model2 = GaussianProcessClassifier(random_state=rs)
+        model = GaussianProcessClassifier(random_state=rs, **p)
+        model2 = GaussianProcessClassifier(random_state=rs, **p)
     elif M == "gunb":
-        model = GaussianNB()
-        model2 = GaussianNB()
+        model = GaussianNB(**p)
+        model2 = GaussianNB(**p)
     elif M == "cnb":
-        model = ComplementNB(alpha=c1)
-        model2 = ComplementNB(alpha=c1)
+        mp = {"alpha": 10, **p}
+        model = ComplementNB(**mp)
+        model2 = ComplementNB(**mp)
     elif M == "bg":
-        model = BaggingClassifier(random_state=rs)
-        model2 = BaggingClassifier(random_state=rs)
+        model = BaggingClassifier(random_state=rs, **p)
+        model2 = BaggingClassifier(random_state=rs, **p)
     elif M == "gb":
-        model = GradientBoostingClassifier(random_state=rs)
-        model2 = GradientBoostingClassifier(random_state=rs)
+        model = GradientBoostingClassifier(random_state=rs, **p)
+        model2 = GradientBoostingClassifier(random_state=rs, **p)
     elif M == "ada":
-        model = AdaBoostClassifier(random_state=rs)
-        model2 = AdaBoostClassifier(random_state=rs)
+        model = AdaBoostClassifier(random_state=rs, **p)
+        model2 = AdaBoostClassifier(random_state=rs, **p)
     elif M == "dl":
         from sklearn.utils.class_weight import compute_class_weight
 
+        dl_params = {
+            "epochs": 300,
+            "hidden_layer_sizes": (500, 1000),
+            "learning_rate": 0.01,
+            "nesterov": True,
+            "optimizer": "adam",
+            "dropout": 0.2,
+            "batch_size": 16,
+            **p,
+        }
         np.random.seed(1)
         class_weight_values = compute_class_weight(
             "balanced", classes=np.unique(y_array), y=y_array
         )
         class_weights = dict(enumerate(class_weight_values))
-        model = _build_dl_model(len(v_names), dl2, dp, omp, lr1, nesterov)
+        model = _build_dl_model(
+            len(v_names),
+            dl_params["hidden_layer_sizes"],
+            dl_params["dropout"],
+            dl_params["optimizer"],
+            dl_params["learning_rate"],
+            dl_params["nesterov"],
+        )
     else:
         raise ValueError(f"unknown model name M={M!r}")
 
@@ -750,15 +759,22 @@ def ModelC(
             X_train, X_test = X_array[train_idx], X_array[test_idx]
             y_train, y_test = y_array[train_idx], y_array[test_idx]
 
-            model2 = _build_dl_model(len(v_names), dl2, dp, omp, lr1, nesterov)
+            model2 = _build_dl_model(
+                len(v_names),
+                dl_params["hidden_layer_sizes"],
+                dl_params["dropout"],
+                dl_params["optimizer"],
+                dl_params["learning_rate"],
+                dl_params["nesterov"],
+            )
             early_stopping = EarlyStopping(
                 monitor="val_loss", patience=5, restore_best_weights=True
             )
             model2.fit(
                 X_train,
                 y_train,
-                batch_size=bs,
-                epochs=ep,
+                batch_size=dl_params["batch_size"],
+                epochs=dl_params["epochs"],
                 validation_data=(X_test, y_test),
                 callbacks=[early_stopping],
                 verbose=0,
@@ -774,8 +790,8 @@ def ModelC(
         model.fit(
             x,
             y,
-            batch_size=bs,
-            epochs=ep,
+            batch_size=dl_params["batch_size"],
+            epochs=dl_params["epochs"],
             callbacks=[early_stopping],
             verbose=0,
             class_weight=class_weights,
@@ -860,7 +876,7 @@ def ModelC(
     elif M in ("rf", "ex", "gb", "ada"):
         VI = model.feature_importances_
     elif M == "svm":
-        if c3 == "linear":
+        if svm_kernel == "linear":
             VI = model.coef_[0]
         else:
             VI = ""
@@ -883,7 +899,7 @@ def ModelC(
         or M == "gunb"
         or M == "cnb"
         or M == "svm"
-        and c3 != "linear"
+        and svm_kernel != "linear"
     ):
         sorted_VI = ""
     else:

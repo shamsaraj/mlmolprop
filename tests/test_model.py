@@ -86,11 +86,46 @@ def clas_train_test(rng, cwd_tmp_path):
     return X.iloc[:30], y.iloc[:30], X.iloc[30:], y.iloc[30:], list(X.columns)
 
 
+# Test data is tiny (a handful of rows, 3-4 features), and each model's
+# hyperparameters now live under real sklearn names rather than an
+# overloaded `c`/`c1` slot -- most model types never actually read that
+# slot in the original code either (only pls/rf/svm/tree did for
+# regression; more did for classification), so only the ones that need a
+# small value to fit this dataset without erroring or running slowly get
+# an entry here.
+REGRESSOR_TEST_PARAMS = {
+    "pls": {"n_components": 3},  # n_components must be <= n_features (3)
+    "rf": {"n_estimators": 3, "max_depth": 2, "max_features": 3},
+    "svm": {"C": 3},
+    "tree": {"max_depth": 3, "max_features": 3},
+}
+
+CLASSIFIER_TEST_PARAMS = {
+    "tree": {"max_depth": 3},
+    "nn": {"hidden_layer_sizes": (3, 3, 3)},
+    "rf": {"max_depth": 3, "n_estimators": 6},
+    "ex": {"max_depth": 3},
+    "lsvm": {"C": 3},
+    "svm": {"C": 3},
+    "lr": {"max_iter": 3},
+    "kn": {"n_neighbors": 3},
+    "cnb": {"alpha": 3},
+}
+
+
 @pytest.mark.parametrize("M", REGRESSORS)
 def test_model_every_regressor_type(reg_train_test, M):
     X_train, y_train, X_test, y_test, v_names = reg_train_test
     result, cv_metrics, fitted_model, analysis = Model(
-        X_train, y_train, X_test, y_test, v_names, c=3, M=M, rs=0, cv="loo"
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        v_names,
+        params=REGRESSOR_TEST_PARAMS.get(M, {}),
+        M=M,
+        rs=0,
+        cv="loo",
     )
     assert "R2" in result
     assert cv_metrics is not None
@@ -101,7 +136,15 @@ def test_model_every_regressor_type(reg_train_test, M):
 def test_modelc_every_classifier_type(clas_train_test, M):
     X_train, y_train, X_test, y_test, v_names = clas_train_test
     result, fitted_model = ModelC(
-        X_train, y_train, X_test, y_test, v_names, c1=3, M=M, rs=0, cv="loo"
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        v_names,
+        params=CLASSIFIER_TEST_PARAMS.get(M, {}),
+        M=M,
+        rs=0,
+        cv="loo",
     )
     assert 0.0 <= result["accuracy_score_train"] <= 1.0
     assert 0.0 <= result["accuracy_score_test"] <= 1.0
@@ -112,11 +155,28 @@ def test_model_cv_off_does_not_crash_and_matches_cv_on(reg_train_test):
     # inside `if cv != "off":` but returned unconditionally, so cv="off"
     # always raised NameError
     X_train, y_train, X_test, y_test, v_names = reg_train_test
+    rf_params = {"n_estimators": 3, "max_depth": 2, "max_features": 3}
     r_off = Model(
-        X_train, y_train, X_test, y_test, v_names, c=3, M="rf", rs=0, cv="off"
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        v_names,
+        params=rf_params,
+        M="rf",
+        rs=0,
+        cv="off",
     )
     r_loo = Model(
-        X_train, y_train, X_test, y_test, v_names, c=3, M="rf", rs=0, cv="loo"
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        v_names,
+        params=rf_params,
+        M="rf",
+        rs=0,
+        cv="loo",
     )
 
     assert r_off[1] is None
@@ -158,13 +218,25 @@ def test_modelc_dl_actually_trains(clas_train_test):
 
     keras.utils.set_random_seed(0)
     fresh_model = _build_dl_model(
-        len(v_names), [8, 4], dp=0.2, omp="adam", lr1=0.01, nesterov=True
+        len(v_names),
+        hidden_layer_sizes=[8, 4],
+        dropout=0.2,
+        optimizer="adam",
+        learning_rate=0.01,
+        nesterov=True,
     )
     fresh_weights = fresh_model.get_weights()[0].copy()
 
     keras.utils.set_random_seed(0)
     result, fitted_model = ModelC(
-        X_train, y_train, X_test, y_test, v_names, M="dl", rs=0, ep=20, dl2=[8, 4], bs=8
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        v_names,
+        M="dl",
+        rs=0,
+        params={"epochs": 20, "hidden_layer_sizes": [8, 4], "batch_size": 8},
     )
     trained_weights = fitted_model.get_weights()[0]
 
@@ -253,7 +325,15 @@ def test_modelc_metrics_match_sklearn_reference(clas_train_test):
 
     X_train, y_train, X_test, y_test, v_names = clas_train_test
     result, fitted = ModelC(
-        X_train, y_train, X_test, y_test, v_names, M="rf", c1=3, rs=0, cv="kf"
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        v_names,
+        M="rf",
+        params={"max_depth": 3, "n_estimators": 6},
+        rs=0,
+        cv="kf",
     )
 
     y_pred_train = fitted.predict(X_train)
