@@ -108,6 +108,97 @@ def test_data_prep_rowremoval_filters_rows(dataset_csv):
     assert set(y_train) | set(y_test) == {0}
 
 
+def test_data_prep_fits_transformers_on_train_rows_only(
+    dataset_with_categorical_csv, monkeypatch
+):
+    # regression guard for the data-leakage bug: VarianceThreshold,
+    # StandardScaler, correlation filtering, and SelectKBest all used to be
+    # fit on the *full* pre-split dataset (SelectKBest even saw the test
+    # set's own target values), biasing every reported R2_test/Q2_CV
+    # optimistically. Spy on each fitted call and assert it only ever sees
+    # as many rows as X_train actually has -- a precise, non-statistical
+    # guard rather than relying on noisy end-to-end metric comparisons.
+    from mlmolprop import processing as processing_module
+
+    vt_calls, scaler_calls, selectkbest_calls, corr_calls = [], [], [], []
+
+    original_vt_fit = processing_module.VarianceThreshold.fit
+    monkeypatch.setattr(
+        processing_module.VarianceThreshold,
+        "fit",
+        lambda self, X, *a, **kw: (
+            vt_calls.append(len(X)),
+            original_vt_fit(self, X, *a, **kw),
+        )[1],
+    )
+
+    original_scaler_fit = processing_module.preprocessing.StandardScaler.fit
+    monkeypatch.setattr(
+        processing_module.preprocessing.StandardScaler,
+        "fit",
+        lambda self, X, *a, **kw: (
+            scaler_calls.append(len(X)),
+            original_scaler_fit(self, X, *a, **kw),
+        )[1],
+    )
+
+    original_skb_fit = processing_module.SelectKBest.fit
+    monkeypatch.setattr(
+        processing_module.SelectKBest,
+        "fit",
+        lambda self, X, y, *a, **kw: (
+            selectkbest_calls.append((len(X), len(y))),
+            original_skb_fit(self, X, y, *a, **kw),
+        )[1],
+    )
+
+    original_find_correlation = processing_module.find_correlation
+    monkeypatch.setattr(
+        processing_module,
+        "find_correlation",
+        lambda data, *a, **kw: (
+            corr_calls.append(len(data)),
+            original_find_correlation(data, *a, **kw),
+        )[1],
+    )
+
+    result = data_prep(
+        dataset_with_categorical_csv,
+        Scaled="on",
+        Cor="on",
+        FS="reg",
+        cat_columns=["cat_col"],
+        mod="class",
+        ratio=0.25,
+        rs=0,
+    )
+    X_train = result[0]
+    n_train = len(X_train)
+
+    assert vt_calls == [n_train]
+    assert scaler_calls == [n_train]
+    assert corr_calls == [n_train]
+    assert selectkbest_calls == [(n_train, n_train)]
+
+
+def test_data_prep_scaler_stats_match_train_rows_not_full_dataset(dataset_csv):
+    # Independent check of the same leakage fix: the fitted StandardScaler's
+    # per-column mean should equal the mean of just the training rows
+    # (identified via the returned X_train's own index into the raw CSV),
+    # not the mean over the full dataset.
+    # data_prep only uses the "name" column as the row index when
+    # imputation="on"; by default (as here) it's dropped and the plain
+    # RangeIndex from read_csv survives through to X_train.index.
+    raw = pd.read_csv(dataset_csv)
+    result = data_prep(dataset_csv, Scaled="on", mod="reg", ratio=0.25, rs=0)
+    X_train, y_train, X_test, y_test, v_names, Xnormalized, Xscaled, v_names2 = result
+
+    train_rows = raw.loc[X_train.index]
+    for i, col in enumerate(v_names2):
+        assert Xscaled.mean_[i] == pytest.approx(train_rows[col].mean())
+        assert Xscaled.mean_[i] != pytest.approx(raw[col].mean())
+
+
 def test_data_prep_remove_and_selection_params(dataset_csv):
     result = data_prep(dataset_csv, REMOVE=["const"], mod="reg", ratio=0.25, rs=0)
     assert "const" not in result[4]

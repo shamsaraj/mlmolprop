@@ -54,13 +54,17 @@ def data_prep(
 ):
     """Load a CSV dataset and run it through the standard QSAR preprocessing pipeline.
 
-    Steps (each individually toggleable): missing-value imputation, row
-    removal by target value, column removal, one-hot encoding of
-    categorical columns, zero-variance filtering, one-hot encoding,
-    normalization, scaling, correlation filtering, univariate feature
-    selection, and a train/test split with an applicability-domain (CI)
-    report. The prepared ``(X, y, ...)`` tuple is also pickled to
-    ``output`` for later reuse.
+    Steps: missing-value imputation, row removal by target value, column
+    removal, one-hot encoding of categorical columns, then a train/test
+    split, followed by (each individually toggleable) zero-variance
+    filtering, normalization, scaling, correlation filtering, and
+    univariate feature selection, plus an applicability-domain (CI)
+    report. The split happens *before* any of those toggleable steps, and
+    each one is fit on the training rows only and applied transform-only
+    to the test rows -- so no feature- or target-derived statistic (a
+    variance, a mean/std, a correlation, an F-test score, ...) is ever
+    computed using information from the test set. The prepared
+    ``(X, y, ...)`` tuple is also pickled to ``output`` for later reuse.
 
     Side effects: writes several diagnostic CSVs to the current working
     directory when the corresponding step runs -- ``cor_mat.csv`` (Cor),
@@ -187,65 +191,103 @@ def data_prep(
     if cat_columns:
         X = pd.get_dummies(X, columns=cat_columns)
 
-    X = VarianceThreshold_selector(X, threshold2=vt)
-    v_names = list(X.columns.values)
-    v_names2 = v_names
     index_names = df.index
-    X = pd.DataFrame(data=X)
     X = X.set_index(index_names)
 
     y = df[[TARGET]]
     y = y.set_index(index_names)
 
-    if Normal == "on":
-        Xnormalized = preprocessing.Normalizer().fit(X)
-        X = Xnormalized.transform(X)
-        X = pd.DataFrame(X, columns=v_names, index=index_names)
-    if Scaled == "on":
-        Xscaled = preprocessing.StandardScaler().fit(X)
-        X = Xscaled.transform(X)
-        X = pd.DataFrame(X, columns=v_names, index=index_names)
-    if Sparse == "on":
-        Xscaled = preprocessing.MaxAbsScaler().fit(X)
-        X = Xscaled.transform(X)
-        X = pd.DataFrame(X, columns=v_names, index=index_names)
-    if Cor == "on":
-        cor_mat = X.corr(method="pearson", min_periods=1)
-        cor_mat.to_csv("cor_mat.csv")
-        col_name = find_correlation(X, 0.9)
-        X = X.drop(col_name, axis=1)
-        v_names = list(X.columns.values)
+    y_split = np.ravel(y)
+    if mod == "class":
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y_split, test_size=ratio, random_state=rs, stratify=y_split
+        )
+    elif mod == "reg":
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y_split, test_size=ratio, random_state=rs
+        )
 
-    y1 = y
+    # Everything below fits on X_train (and y_train, where relevant) only,
+    # then applies transform-only to X_test -- no feature, target, or
+    # distributional information from the test set is allowed to leak
+    # into what gets fit here (variance/near-constant filtering, scaling,
+    # correlation filtering, and univariate feature selection all
+    # previously fit on the full pre-split dataset, which biases every
+    # downstream R2_test/Q2_CV optimistically since feature selection in
+    # particular was seeing the test set's own target values).
+    vt_selector = VarianceThreshold(vt).fit(X_train)
+    vt_columns = X_train.columns[vt_selector.get_support(indices=True)]
+    X_train = pd.DataFrame(
+        vt_selector.transform(X_train), columns=vt_columns, index=X_train.index
+    )
+    X_test = pd.DataFrame(
+        vt_selector.transform(X_test), columns=vt_columns, index=X_test.index
+    )
+    v_names = list(X_train.columns.values)
+    v_names2 = v_names
+
+    if Normal == "on":
+        Xnormalized = preprocessing.Normalizer().fit(X_train)
+        X_train = pd.DataFrame(
+            Xnormalized.transform(X_train), columns=v_names, index=X_train.index
+        )
+        X_test = pd.DataFrame(
+            Xnormalized.transform(X_test), columns=v_names, index=X_test.index
+        )
+    if Scaled == "on":
+        Xscaled = preprocessing.StandardScaler().fit(X_train)
+        X_train = pd.DataFrame(
+            Xscaled.transform(X_train), columns=v_names, index=X_train.index
+        )
+        X_test = pd.DataFrame(
+            Xscaled.transform(X_test), columns=v_names, index=X_test.index
+        )
+    if Sparse == "on":
+        Xscaled = preprocessing.MaxAbsScaler().fit(X_train)
+        X_train = pd.DataFrame(
+            Xscaled.transform(X_train), columns=v_names, index=X_train.index
+        )
+        X_test = pd.DataFrame(
+            Xscaled.transform(X_test), columns=v_names, index=X_test.index
+        )
+    if Cor == "on":
+        cor_mat = X_train.corr(method="pearson", min_periods=1)
+        cor_mat.to_csv("cor_mat.csv")
+        col_name = find_correlation(X_train, 0.9)
+        X_train = X_train.drop(col_name, axis=1)
+        X_test = X_test.drop(col_name, axis=1)
+        v_names = list(X_train.columns.values)
+
     if FS in ("clas", "reg"):
-        y = np.ravel(y)
         if FS == "clas":
-            selector = SelectKBest(f_classif, k=ndes).fit(X, y)
+            selector = SelectKBest(f_classif, k=ndes).fit(X_train, y_train)
             p_values = selector.pvalues_
             bonferroni = p_values * len(v_names2)
             bonferroni_df = pd.DataFrame(bonferroni, index=v_names, columns=["p value"])
             bonferroni_df.to_csv("Bonferroni.csv")
-            selected = selector.fit_transform(X, y)
         else:
-            selector = SelectKBest(score_func=f_regression, k=ndes).fit(X, y)
-            selected = selector.transform(X)
+            selector = SelectKBest(score_func=f_regression, k=ndes).fit(
+                X_train, y_train
+            )
         mask = selector.get_support()
-        v_names = X.columns[mask]
-        X = pd.DataFrame(selected, columns=v_names, index=index_names)
-        v_names = list(X.columns.values)
+        v_names = X_train.columns[mask]
+        X_train = pd.DataFrame(
+            selector.transform(X_train), columns=v_names, index=X_train.index
+        )
+        X_test = pd.DataFrame(
+            selector.transform(X_test), columns=v_names, index=X_test.index
+        )
+        v_names = list(X_train.columns.values)
 
-    dfout = pd.concat([y1, X], axis=1)
+    y_train_series = pd.Series(y_train, index=X_train.index, name=TARGET)
+    y_test_series = pd.Series(y_test, index=X_test.index, name=TARGET)
+    dfout = pd.concat(
+        [
+            pd.concat([y_train_series, X_train], axis=1),
+            pd.concat([y_test_series, X_test], axis=1),
+        ]
+    )
     dfout.to_csv("dfout.csv")
-
-    y = np.ravel(y)
-    if mod == "class":
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=ratio, random_state=rs, stratify=y
-        )
-    elif mod == "reg":
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=ratio, random_state=rs
-        )
 
     ci_table = CI(X_train, X_test, v_names, X_train.index, X_test.index, cutoff=3)
     ci_table[0].to_csv("CI_train.csv")
