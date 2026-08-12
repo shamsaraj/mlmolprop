@@ -288,11 +288,28 @@ def clus_uns(
             plt.show()
 
         if M == "kmeans":
+            # `labels` is always canonicalized to {0, 1} above, but the
+            # actual target y1/ytest can be any two-valued encoding (e.g.
+            # a raw {1.0, 2.0} stage column) -- comparing those directly
+            # against {0, 1} cluster labels makes confusion_matrix treat
+            # them as 3+ distinct classes (union of both label sets)
+            # instead of a 2x2 table, so cnf.ravel() below has more than
+            # 4 entries. Map the two actual-target values onto {0, 1}
+            # first so both sides of the comparison use the same scale.
+            def _to_binary(values):
+                values = np.asarray(values)
+                uniq = np.unique(values)
+                if len(uniq) != 2:
+                    return values
+                return np.where(values == uniq[1], 1, 0)
+
+            y1_bin = _to_binary(y1)
+
             # Only "kmeans" actually uses this confusion matrix (plotted
             # below); computing it unconditionally for "pc-km" too was dead
             # work that also assumed exactly 2 clusters (cnf.ravel() into
             # tp/fp/fn/tn), crashing for any other n2.
-            cnf = confusion_matrix(y1, labels)
+            cnf = confusion_matrix(y1_bin, labels)
             # sklearn's confusion_matrix(...).ravel() for binary labels [0, 1]
             # returns [tn, fp, fn, tp] -- NOT [tp, fp, fn, tn]. Unpacking in
             # the wrong order silently swaps which count is called "tp" vs
@@ -312,7 +329,7 @@ def clus_uns(
                     elif ytest_labels[i] == 0:
                         ytest_labels[i] = 1
 
-            cnf3 = confusion_matrix(ytest, ytest_labels)
+            cnf3 = confusion_matrix(_to_binary(ytest), ytest_labels)
             tnt, fpt, fnt, tpt = cnf3.ravel()
             cnf3[0][0] = tpt
             cnf3[1][1] = tnt
