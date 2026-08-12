@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "mlmolprop"
@@ -25,16 +25,27 @@ dependencies = [
   "reportlab>=5.0",
   "svglib>=2.1",
   "keras>=3.15",
+  # Not directly imported -- keras itself is (model.py, the M="dl" path),
+  # but keras 3 needs a backend engine to run and doesn't name one; this
+  # is the backend environment.yml was actually tested against.
   "tensorflow>=2.18",
   "lime>=0.2",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
+# graphviz is imported only inside a try/except in model.py's decision-tree
+# visualization path (already treated as optional by the code itself), and
+# isn't in environment.yml, so there's no tested version to anchor a lower
+# bound to.
+viz = ["graphviz"]
 
 [project.urls]
 "Homepage" = "https://github.com/shamsaraj/mlmolprop"
 "Bug Tracker" = "https://github.com/shamsaraj/mlmolprop/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mlmolprop"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -47,4 +58,3 @@ markers = [
 # return shape at the call site, even when a given test only asserts on
 # part of it.
 "tests/*" = ["RUF059"]
-
