@@ -119,6 +119,13 @@ dataset**, then goes further:
 - classification, with confusion matrices for the best-by-CV classifier
   and for a small Keras deep-learning model
 
+> **Verified against mlmolprop 1.1.0** -- every cell, including the
+> deep-learning classification cell (`M="dl"`), runs end-to-end with no
+> errors (`jupyter nbconvert --execute`). The DL cell needs the `dl`
+> extra installed; the notebook sets `KERAS_BACKEND=torch` itself, so no
+> manual setup is needed beyond `pip install "mlmolprop[dl]"` (or
+> conda-forge on Intel macOS -- see Installation above).
+
 Open it with `jupyter notebook` after installing (the `notebook`/`nbconvert`
 dev tools are included in `environment.yml`).
 
