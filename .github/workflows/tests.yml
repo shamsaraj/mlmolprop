@@ -10,7 +10,7 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up conda environment
         uses: conda-incubator/setup-miniconda@v3
@@ -26,7 +26,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up conda environment
         uses: conda-incubator/setup-miniconda@v3
