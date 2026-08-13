@@ -132,6 +132,139 @@ def test_model_every_regressor_type(reg_train_test, M):
     assert analysis is not None
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "known bug: Model() sets `f = 0` once near the top and never "
+        "reassigns it -- basic.F() exists and computes a real F-statistic "
+        "but Model() never calls it. Every single Model() result reports "
+        "F=0.0 unconditionally, for every model type."
+    ),
+)
+@pytest.mark.parametrize("M", ["mlr", "rf", "pls"])
+def test_model_f_statistic_is_never_hardcoded_zero(reg_train_test, M):
+    # Property: a real F-statistic landing on exactly 0.0 is vanishingly
+    # unlikely across different model types/data -- "always identically 0"
+    # is itself the signal that it's not being computed at all.
+    X_train, y_train, X_test, y_test, v_names = reg_train_test
+    result, _, _, _ = Model(
+        X_train, y_train, X_test, y_test, v_names,
+        params=REGRESSOR_TEST_PARAMS.get(M, {}), M=M, rs=0, cv="loo",
+    )
+    assert result["F"] != 0.0
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="known bug, same as test_model_f_statistic_is_never_hardcoded_zero",
+)
+def test_model_f_statistic_near_null_value_for_unrelated_data(rng, cwd_tmp_path):
+    # Edge case: y with essentially zero real relationship to x. A hardcoded
+    # 0.0 happens to be numerically plausible near the null-hypothesis
+    # region, so a loose "is F near 1" tolerance wouldn't actually
+    # distinguish the bug from a fix -- compare against the independently
+    # computed value instead, which does. (0.59 here, not 0 -- verified by
+    # direct computation, not assumed.)
+    from mlmolprop.basic import F as basic_F
+
+    n = 30
+    X = pd.DataFrame(rng.normal(size=(n, 3)), columns=["f1", "f2", "f3"])
+    y = pd.Series(rng.normal(size=n))  # unrelated to X by construction
+    X_train, y_train, X_test, y_test = X.iloc[:22], y.iloc[:22], X.iloc[22:], y.iloc[22:]
+
+    result, _, fitted_model, _ = Model(
+        X_train, y_train, X_test, y_test, list(X.columns), M="mlr", rs=0, cv="loo",
+    )
+    y_predict_train = fitted_model.predict(X_train)
+    expected_f = basic_F(y_train, y_predict_train, k=3)
+    assert result["F"] == pytest.approx(expected_f)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="known bug, same as test_model_f_statistic_is_never_hardcoded_zero",
+)
+def test_model_f_statistic_known_answer_matches_basic_F(reg_train_test):
+    # Known-answer case: the correct value is directly computable via
+    # basic.F(), which already exists and is independently tested
+    # (test_basic.py) -- this just checks Model() is wired to use it.
+    from mlmolprop.basic import F as basic_F
+
+    X_train, y_train, X_test, y_test, v_names = reg_train_test
+    result, _, fitted_model, _ = Model(
+        X_train, y_train, X_test, y_test, v_names, M="mlr", rs=0, cv="loo",
+    )
+    y_predict_train = fitted_model.predict(X_train)
+    expected_f = basic_F(y_train, y_predict_train, k=len(v_names))
+    assert result["F"] == pytest.approx(expected_f)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "known bug: for M='nn', Variable Importance is computed as "
+        "np.dot(model.coefs_[0], model.coefs_[1]) -- only the first two "
+        "weight matrices (input -> first hidden layer -> second hidden "
+        "layer). The default hidden_layer_sizes has 3 hidden layers, so "
+        "coefs_ always has 4 matrices; layers 3 and the output layer are "
+        "silently ignored. The result is also the wrong shape: "
+        "(n_features, hidden_layer_2_size) instead of one importance "
+        "value per feature. Same bug in ModelC()."
+    ),
+)
+def test_model_nn_variable_importance_has_one_value_per_feature(reg_train_test):
+    # Property: "Variable Importance" should have exactly one column (one
+    # value per feature), not one column per unit in the second hidden
+    # layer.
+    X_train, y_train, X_test, y_test, v_names = reg_train_test
+    result, _, _, _ = Model(
+        X_train, y_train, X_test, y_test, v_names, M="nn", rs=0, cv="off",
+        params={"max_iter": 50},  # default hidden_layer_sizes: 3 hidden layers
+    )
+    assert result["Variable Importance"].shape == (len(v_names), 1)
+
+
+def test_model_nn_variable_importance_correct_for_single_hidden_layer(reg_train_test):
+    # Edge case: with only ONE hidden layer, coefs_ has exactly 2 matrices,
+    # so the current np.dot(coefs_[0], coefs_[1]) genuinely covers the
+    # whole network -- confirms the bug is specifically about >=2 hidden
+    # layers, not the approach being wrong in general.
+    X_train, y_train, X_test, y_test, v_names = reg_train_test
+    result, _, _, _ = Model(
+        X_train, y_train, X_test, y_test, v_names, M="nn", rs=0, cv="off",
+        params={"max_iter": 50, "hidden_layer_sizes": (5,)},
+    )
+    assert result["Variable Importance"].shape == (len(v_names), 1)
+
+
+def test_model_nn_variable_importance_ranks_dominant_feature_highest(rng, cwd_tmp_path):
+    # Known-answer case (directional -- there's no simple closed form for
+    # NN importance in general), using the same single-hidden-layer config
+    # as the edge case above (the one config the current shape isn't wrong
+    # for): one feature obviously dominates the target, so it should be
+    # ranked most important. Deliberately *not* testing this against the
+    # buggy multi-layer default -- verified directly that the wrong-shaped
+    # VI's column 0 doesn't reliably break the ranking either way, so an
+    # xfail there would be flaky rather than a real demonstration; the
+    # property test above already covers the shape bug unconditionally.
+    # Scaled features, enough data/iterations to actually converge (a first
+    # attempt with unscaled features and few iterations produced an
+    # unconverged fit -- ConvergenceWarning -- and a genuinely unreliable
+    # ranking; this config gets R^2 > 0.99 on train, a real fit).
+    n = 200
+    X = pd.DataFrame(rng.uniform(-1, 1, size=(n, 3)), columns=["dominant", "f2", "f3"])
+    y = pd.Series(10 * X["dominant"] + 0.01 * rng.normal(size=n))
+    X_train, y_train, X_test, y_test = X.iloc[:150], y.iloc[:150], X.iloc[150:], y.iloc[150:]
+
+    result, _, _, _ = Model(
+        X_train, y_train, X_test, y_test, list(X.columns), M="nn", rs=0, cv="off",
+        params={"max_iter": 2000, "hidden_layer_sizes": (5,)},
+    )
+    vi = result["Variable Importance"]
+    most_important = vi.abs().iloc[:, 0].idxmax()
+    assert most_important == "dominant"
+
+
 @pytest.mark.parametrize("M", CLASSIFIERS)
 def test_modelc_every_classifier_type(clas_train_test, M):
     X_train, y_train, X_test, y_test, v_names = clas_train_test
@@ -288,6 +421,100 @@ def test_rocc_uses_actual_label_param_not_hardcoded(rng):
     y = pd.Series(rng.choice([0, 1], size=30))
     x = pd.Series(rng.uniform(size=30))
     rocc(x, y, l=1)  # must not raise for a label that actually appears in y
+
+
+def _parse_ef(captured_stdout: str) -> dict:
+    """Pull {"EF1": value, "EF2": value, ...} out of rocc()'s printed lines."""
+    ef = {}
+    for line in captured_stdout.splitlines():
+        if "-->" in line:
+            value_str, name = line.split("-->")
+            ef[name.strip()] = float(value_str.strip())
+    return ef
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "known bug: COUNT() inside rocc() takes the literal first "
+        "int(len(y)*percent) rows of y for its enrichment-factor "
+        "calculation -- it never sorts by the score x first. Enrichment "
+        "factor is only meaningful for the top-scoring fraction, so the "
+        "reported EF1/EF2/EF10/EF20/EF50 silently depend on whatever row "
+        "order the caller happened to pass in, not on x at all. The "
+        "ROC/AUC part of the same function is unaffected, since "
+        "sklearn.metrics.roc_curve sorts internally -- only this "
+        "hand-rolled loop ignores x."
+    ),
+)
+def test_rocc_enrichment_factor_is_invariant_to_row_order(rng, capsys):
+    # Property: EF is defined in terms of (score, label) pairs, not row
+    # position, so permuting the rows together must not change the printed
+    # EF values (the AUC/ROC part already satisfies this, via sklearn).
+    n = 50
+    x = pd.Series(rng.uniform(size=n))
+    y = pd.Series(rng.choice([0, 1], size=n))
+
+    rocc(x, y, l=1)
+    ef_original = _parse_ef(capsys.readouterr().out)
+
+    perm = rng.permutation(n)
+    x_shuffled = x.iloc[perm].reset_index(drop=True)
+    y_shuffled = y.iloc[perm].reset_index(drop=True)
+    rocc(x_shuffled, y_shuffled, l=1)
+    ef_shuffled = _parse_ef(capsys.readouterr().out)
+
+    assert ef_original == ef_shuffled
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "known bug, same root cause as "
+        "test_rocc_enrichment_factor_is_invariant_to_row_order: with a "
+        "perfect classifier (AUC=1.0) whose actives happen to sit at the "
+        "END of y's row order, every EF comes out 0.0 -- self-contradictory "
+        "with AUC=1.0, since a perfect classifier's top-scored fraction is "
+        "by definition all actives."
+    ),
+)
+def test_rocc_enrichment_factor_not_contradicted_by_perfect_auc(capsys):
+    # Edge case: actives have the 10 highest scores (perfect separation,
+    # AUC=1.0) but are placed at the END of y's positional order, so a
+    # score-blind, position-based EF calculation gets them completely
+    # backwards.
+    x = pd.Series(np.concatenate([np.linspace(5, 0, 90), np.linspace(10, 9, 10)]))
+    y = pd.Series([0] * 90 + [1] * 10)
+
+    rocc(x, y, l=1)
+    out = capsys.readouterr().out
+    ef = _parse_ef(out)
+
+    assert "1.0" in out  # AUC: perfect separation
+    assert ef["EF10"] > 0  # top-10%-by-score are the actives -- should enrich
+
+
+def test_rocc_enrichment_factor_known_answer_when_input_is_prescored(capsys):
+    # Known-answer case: same scenario as the perfect-AUC edge case above,
+    # but with y already given in score-sorted order (actives first) --
+    # the precondition COUNT() silently assumes. Confirms the EF *formula*
+    # itself is correct; only the missing sort is the bug. Hand-computed:
+    # baseline=10/100=0.1; top 1%/2%/10% are all-active -> rate=1.0 ->
+    # EF=1.0/0.1=10; top 20% has 10 actives of 20 -> rate=0.5 -> EF=5;
+    # top 50% has 10 actives of 50 -> rate=0.2 -> EF=2.
+    x = pd.Series(np.concatenate([np.linspace(10, 9, 10), np.linspace(5, 0, 90)]))
+    y = pd.Series([1] * 10 + [0] * 90)
+
+    rocc(x, y, l=1)
+    ef = _parse_ef(capsys.readouterr().out)
+
+    assert ef == {
+        "EF1": pytest.approx(10.0),
+        "EF2": pytest.approx(10.0),
+        "EF10": pytest.approx(10.0),
+        "EF20": pytest.approx(5.0),
+        "EF50": pytest.approx(2.0),
+    }
 
 
 def test_metr_matches_hand_computed_ground_truth():

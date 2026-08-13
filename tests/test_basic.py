@@ -74,6 +74,51 @@ def test_f_statistic_matches_manual_msr_over_mse():
     assert F(obs, pred, k) == pytest.approx(msr / mse)
 
 
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+def test_f_statistic_never_negative_when_degrees_of_freedom_are_sufficient(seed):
+    # Property: F is a ratio of two sums-of-squares-over-positive-denominators
+    # (MSR/MSE), so whenever n - k - 1 > 0 it must be >= 0 -- never negative --
+    # regardless of how bad the predictions are.
+    rng = np.random.default_rng(seed)
+    n, k = 20, 3
+    obs = rng.normal(size=n)
+    pred = obs + rng.normal(scale=2.0, size=n)  # noisy, not perfectly correlated
+    assert F(obs, pred, k) >= 0
+
+
+def test_f_statistic_known_answer_matches_textbook_anova_formula():
+    # Known-answer case: real single-predictor linear regression (y = a + b*x),
+    # fit independently via numpy.polyfit. The textbook ANOVA F-statistic
+    # (MSR/MSE from the regression/residual sums of squares) is computed here
+    # by hand from that fit, entirely independently of F()'s own internals,
+    # and must match.
+    x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    y = np.array([2.1, 3.9, 6.2, 7.8, 10.1])
+    b, a = np.polyfit(x, y, 1)
+    pred = a + b * x
+    n, k = len(y), 1
+    ss_res = np.sum((y - pred) ** 2)
+    ss_reg = np.sum((pred - np.mean(y)) ** 2)
+    f_expected = (ss_reg / k) / (ss_res / (n - k - 1))
+    assert F(y, pred, k) == pytest.approx(f_expected)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "known bug: F() computes mse = press(obs, pred) / (n - k - 1) with "
+        "no guard on the denominator, unlike its sibling RMSEP_CV_C() which "
+        "explicitly raises ValueError for the identical 'not enough "
+        "observations for k predictors' condition (denom <= 0). When "
+        "n - k - 1 < 0, F() silently returns a negative number instead of "
+        "erroring -- a negative F-ratio is not a valid statistic."
+    ),
+)
+def test_f_statistic_insufficient_degrees_of_freedom_raises():
+    with pytest.raises(ValueError):
+        F([1.0, 2.0, 3.0], [1.1, 2.2, 2.7], k=3)
+
+
 def test_analyse_returns_expected_keys():
     ytrain = [1.0, 2.0, 3.0, 4.0, 5.0]
     y_pred_train = [1.1, 1.9, 3.2, 3.8, 5.3]

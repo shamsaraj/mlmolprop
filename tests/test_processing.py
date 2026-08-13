@@ -100,6 +100,117 @@ def test_data_prep_imputation_actually_imputes(dataset_csv, rng):
     assert not result[0].isnull().values.any()
 
 
+def _make_name_position_csv(path, name_position: int, rng):
+    # 4 columns: featA, name, activity, featB, reordered so NAME sits at
+    # `name_position`. featA/featB get distinctive, easily-checked values.
+    n = 40
+    cols = {
+        "featA": np.arange(1000, 1000 + n, dtype=float),
+        "name": [f"m{i}" for i in range(n)],
+        "activity": rng.integers(0, 2, size=n),
+        "featB": np.arange(-n, 0, dtype=float),
+    }
+    order = [c for c in cols if c != "name"]
+    order.insert(name_position, "name")
+    pd.DataFrame({c: cols[c] for c in order}).to_csv(path, index=False)
+
+
+def test_data_prep_imputation_v_names_correct_when_name_is_first_column(
+    cwd_tmp_path, rng
+):
+    # NAME as the first column is the one arrangement that already works
+    # correctly today (a passing baseline, not part of the bug).
+    csv_path = "data.csv"
+    _make_name_position_csv(csv_path, name_position=0, rng=rng)
+
+    result = data_prep(
+        csv_path, imputation="on", NAME="name", TARGET="activity",
+        mod="class", ratio=0.25, rs=0,
+    )
+    v_names = result[4]
+    assert set(v_names) == {"featA", "featB"}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "known bug: with imputation='on', the post-imputation DataFrame's "
+        "columns are reassigned via `df.columns.values[1:]` -- positional, "
+        "'drop column 0' -- while the column actually dropped from the data "
+        "(df1 = df.drop(NAME, axis=1)) is NAME *by label*, wherever it "
+        "sits. Whenever NAME isn't literally the first CSV column, every "
+        "feature positioned before NAME gets silently relabeled one slot "
+        "off (its data survives, but under the wrong column name), and "
+        "NAME's own data ends up mislabeled as a real feature."
+    ),
+)
+@pytest.mark.parametrize("name_position", [1, 2, 3])
+def test_data_prep_imputation_v_names_correct_regardless_of_name_column_position(
+    cwd_tmp_path, rng, name_position
+):
+    # Property: v_names (the real feature columns) should be the same set
+    # -- {featA, featB} -- no matter where NAME happens to sit in the CSV.
+    # (name_position=0 is covered separately above -- it's the one case
+    # that isn't buggy.)
+    csv_path = "data.csv"
+    _make_name_position_csv(csv_path, name_position, rng)
+
+    result = data_prep(
+        csv_path, imputation="on", NAME="name", TARGET="activity",
+        mod="class", ratio=0.25, rs=0,
+    )
+    v_names = result[4]
+    assert set(v_names) == {"featA", "featB"}
+
+
+def test_data_prep_imputation_name_last_column_extreme_case(cwd_tmp_path, rng):
+    # Edge case: NAME as the very LAST column -- every other column sits
+    # before it, so (per the bug above) every single one gets shifted, not
+    # just one -- including TARGET itself. Verified directly: TARGET ends
+    # up holding featA's marker values (1000, 1001, ...), which are
+    # non-repeating, so the stratified train/test split downstream raises
+    # ValueError ("least populated class has only 1 member") instead of
+    # silently training on a corrupted target. A real, if noisier, failure
+    # mode of the same underlying bug -- this is the case where the bug
+    # happens to announce itself rather than staying silent.
+    csv_path = "data.csv"
+    _make_name_position_csv(csv_path, name_position=3, rng=rng)
+
+    with pytest.raises(ValueError, match="least populated class"):
+        data_prep(
+            csv_path, imputation="on", NAME="name", TARGET="activity",
+            mod="class", ratio=0.25, rs=0,
+        )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "known bug, same as the other imputation/name-position tests -- "
+        "documented here with the exact hand-traced and directly-verified "
+        "values for one specific case."
+    ),
+)
+def test_data_prep_imputation_name_not_first_known_answer(cwd_tmp_path, rng):
+    # Known-answer case, hand-traced and confirmed by direct execution:
+    # columns [featA, name, activity, featB] (NAME at position 1) ->
+    # reconstruction drops position 0 ("featA") from the label list, so
+    # v_names currently comes out as ['name', 'featB'] -- featA's data is
+    # silently relabeled "name", and "activity" happens to stay correctly
+    # aligned since it comes after NAME's original position (only columns
+    # *before* NAME get corrupted). Documents the exact, verified failure.
+    csv_path = "data.csv"
+    _make_name_position_csv(csv_path, name_position=1, rng=rng)
+
+    result = data_prep(
+        csv_path, imputation="on", NAME="name", TARGET="activity",
+        mod="class", ratio=0.25, rs=0,
+    )
+    v_names = result[4]
+    assert "featA" in v_names
+    assert "name" not in v_names
+
+
 def test_data_prep_rowremoval_filters_rows(dataset_csv):
     result = data_prep(
         dataset_csv, rowremoval=1, TARGET="IC50", mod="class", ratio=0.25, rs=0
@@ -197,6 +308,184 @@ def test_data_prep_scaler_stats_match_train_rows_not_full_dataset(dataset_csv):
     for i, col in enumerate(v_names2):
         assert Xscaled.mean_[i] == pytest.approx(train_rows[col].mean())
         assert Xscaled.mean_[i] != pytest.approx(raw[col].mean())
+
+
+@pytest.fixture
+def bonferroni_dataset_csv(rng, cwd_tmp_path):
+    # f1_dup is near-perfectly correlated with f1, so Cor="on" drops
+    # exactly one of them -- leaving 3 real features (f1_dup, f2, f3) at
+    # SelectKBest time, down from 4 before correlation filtering.
+    n = 60
+    f1 = rng.normal(size=n)
+    df = pd.DataFrame(
+        {
+            "name": [f"m{i}" for i in range(n)],
+            "f1": f1,
+            "f1_dup": f1 * 2 + rng.normal(scale=0.0001, size=n),
+            "f2": rng.normal(size=n),
+            "f3": rng.normal(size=n),
+            "activity": rng.integers(0, 2, size=n),
+        }
+    )
+    df.to_csv("bonferroni_data.csv", index=False)
+    return "bonferroni_data.csv"
+
+
+def _bonferroni_multiplier(monkeypatch, csv_path, **data_prep_kwargs):
+    """Run data_prep with FS="clas", returning (implied_multiplier, n_at_fit)."""
+    from mlmolprop import processing as processing_module
+
+    captured = {}
+    original_fit = processing_module.SelectKBest.fit
+
+    def spy_fit(self, X, y, *a, **kw):
+        result = original_fit(self, X, y, *a, **kw)
+        captured["pvalues"] = result.pvalues_.copy()
+        captured["n_at_fit"] = X.shape[1]
+        return result
+
+    monkeypatch.setattr(processing_module.SelectKBest, "fit", spy_fit)
+
+    data_prep(
+        csv_path, TARGET="activity", FS="clas", mod="class", ratio=0.25, rs=0,
+        **data_prep_kwargs,
+    )
+    bonferroni_df = pd.read_csv("Bonferroni.csv", index_col=0)
+    implied_multiplier = bonferroni_df["p value"].to_numpy() / captured["pvalues"]
+    return implied_multiplier, captured["n_at_fit"]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "known bug: the Bonferroni multiplier (bonferroni = p_values * "
+        "len(v_names2)) uses v_names2, the feature count from right after "
+        "VarianceThreshold filtering -- not the actual number of features "
+        "SelectKBest is testing at that point. When Cor='on' drops "
+        "correlated features first, the multiplier is left stale (too "
+        "large), over-correcting the reported significance."
+    ),
+)
+def test_data_prep_bonferroni_multiplier_matches_features_actually_tested(
+    monkeypatch, bonferroni_dataset_csv
+):
+    # Property: the multiplier baked into Bonferroni.csv should equal the
+    # number of features SelectKBest actually saw, whatever that is.
+    implied_multiplier, n_at_fit = _bonferroni_multiplier(
+        monkeypatch, bonferroni_dataset_csv, Cor="on"
+    )
+    assert implied_multiplier == pytest.approx(n_at_fit)
+
+
+def test_data_prep_bonferroni_multiplier_correct_without_correlation_filtering(
+    monkeypatch, bonferroni_dataset_csv
+):
+    # Edge case: with Cor="off" (the default), v_names2 and the actual
+    # SelectKBest feature count never diverge, so the multiplier is
+    # correct today -- confirms the bug is specifically about Cor="on"
+    # changing the feature count out from under the stale v_names2, not
+    # about the Bonferroni formula being wrong in general.
+    implied_multiplier, n_at_fit = _bonferroni_multiplier(
+        monkeypatch, bonferroni_dataset_csv
+    )
+    assert implied_multiplier == pytest.approx(n_at_fit)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="known bug, same as test_data_prep_bonferroni_multiplier_matches_features_actually_tested",
+)
+def test_data_prep_bonferroni_multiplier_known_answer(monkeypatch, bonferroni_dataset_csv):
+    # Known-answer case, verified by direct execution: 4 features survive
+    # VarianceThreshold (f1, f1_dup, f2, f3) -> v_names2 has length 4.
+    # Cor="on" then drops f1 (correlated with f1_dup), leaving 3 features
+    # at SelectKBest time. The multiplier currently used is 4, not 3.
+    implied_multiplier, n_at_fit = _bonferroni_multiplier(
+        monkeypatch, bonferroni_dataset_csv, Cor="on"
+    )
+    assert n_at_fit == 3
+    assert implied_multiplier == pytest.approx(3)
+
+
+@pytest.fixture
+def dataset_with_missing_target_csv(rng, cwd_tmp_path):
+    n = 40
+    df = pd.DataFrame(
+        {
+            "name": [f"m{i}" for i in range(n)],
+            "f1": rng.normal(size=n),
+            "f2": rng.normal(size=n),
+            "activity": rng.normal(loc=50, scale=5, size=n),
+        }
+    )
+    df.loc[3, "activity"] = np.nan
+    df.to_csv("target_missing.csv", index=False)
+    return "target_missing.csv", df["activity"].dropna().mean()
+
+
+def test_data_prep_imputation_never_alters_present_target_values(
+    dataset_with_missing_target_csv,
+):
+    # Property (necessary but not sufficient on its own -- paired with the
+    # edge case below): imputation must never change a target value that
+    # was actually present. This part already holds today; SimpleImputer
+    # only ever fills genuine NaNs.
+    csv_path, _ = dataset_with_missing_target_csv
+    original = pd.read_csv(csv_path)
+    present_mask = original["activity"].notna()
+    present_names = original.loc[present_mask, "name"]
+    present_values = original.loc[present_mask, "activity"]
+
+    result = data_prep(csv_path, imputation="on", TARGET="activity", mod="reg", ratio=0.25, rs=0)
+    X_train, y_train, X_test, y_test = result[0], result[1], result[2], result[3]
+    all_names = list(X_train.index) + list(X_test.index)
+    all_y = dict(zip(all_names, list(y_train) + list(y_test)))
+
+    for name, value in zip(present_names, present_values):
+        if name in all_y:
+            assert all_y[name] == pytest.approx(value)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "known bug: imputation='on' fits SimpleImputer on df1 = "
+        "df.drop(NAME, axis=1), which still includes TARGET. A row with a "
+        "genuinely missing label gets a fake mean-imputed label instead of "
+        "being dropped, and is silently trained/evaluated on as if it were "
+        "real ground truth."
+    ),
+)
+def test_data_prep_imputation_drops_rows_with_missing_target(
+    dataset_with_missing_target_csv,
+):
+    # Edge case: a row whose TARGET is missing should not survive into
+    # the final train/test split at all -- currently it does, holding a
+    # fabricated mean-imputed value.
+    csv_path, _ = dataset_with_missing_target_csv
+    result = data_prep(csv_path, imputation="on", TARGET="activity", mod="reg", ratio=0.25, rs=0)
+    X_train, X_test = result[0], result[2]
+    all_names = list(X_train.index) + list(X_test.index)
+    assert "m3" not in all_names  # row 3 is the one with the missing target
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="known bug, same as test_data_prep_imputation_drops_rows_with_missing_target",
+)
+def test_data_prep_imputation_missing_target_known_answer(
+    dataset_with_missing_target_csv,
+):
+    # Known-answer case, verified by direct execution: with the fake-label
+    # bug present, row 3's imputed target comes out equal to the mean of
+    # the other 39 targets. Correct behavior is for that row to be absent
+    # entirely, so no y value should be close to that mean at all.
+    csv_path, mean_of_present = dataset_with_missing_target_csv
+    result = data_prep(csv_path, imputation="on", TARGET="activity", mod="reg", ratio=0.25, rs=0)
+    y_train, y_test = result[1], result[3]
+    all_y = np.concatenate([y_train, y_test])
+    assert len(all_y) == 39
+    assert not np.any(np.isclose(all_y, mean_of_present, atol=1e-6))
 
 
 def test_data_prep_remove_and_selection_params(dataset_csv):
