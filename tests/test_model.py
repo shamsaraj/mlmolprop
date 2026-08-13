@@ -1,5 +1,7 @@
 """Tests for mlmolprop.model -- parametrized across every supported model type."""
 
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -377,6 +379,17 @@ def test_modelc_dl_actually_trains(clas_train_test):
     # loose sanity check: a trained binary classifier shouldn't be worse
     # than a coin flip on a balanced task
     assert result["accuracy_score_train"] >= 0.5
+
+
+def test_modelc_dl_missing_keras_raises_informative_error(monkeypatch, clas_train_test):
+    # keras/tensorflow live behind the optional "dl" extra; if they're not
+    # installed, M="dl" should fail with a clear message pointing at how to
+    # get them, not a bare ImportError from deep inside _build_dl_model.
+    X_train, y_train, X_test, y_test, v_names = clas_train_test
+    monkeypatch.setitem(sys.modules, "keras", None)
+
+    with pytest.raises(ImportError, match=r"pip install 'mlmolprop\[dl\]'"):
+        ModelC(X_train, y_train, X_test, y_test, v_names, M="dl", rs=0)
 
 
 def test_clus_uns_pca_then_kmeans_then_pc_km_in_one_process(reg_train_test):

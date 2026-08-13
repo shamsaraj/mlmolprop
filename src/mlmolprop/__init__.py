@@ -1,5 +1,7 @@
 """mlmolprop: cheminformatics and QSAR modeling toolkit built on RDKit and scikit-learn."""
 
+from importlib.metadata import version
+
 from .basic import (
     RMSEP_CV_C,
     F,
@@ -39,6 +41,8 @@ from .processing import (
     list2file,
     object2file,
 )
+
+__version__ = version("mlmolprop")
 
 __all__ = [
     "CI",

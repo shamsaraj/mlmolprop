@@ -569,11 +569,24 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo"):
     return [result, List, model, analysis]
 
 
+# Torch models belong behind this same M= interface (e.g. M="dl_torch"),
+# not a separate function/entry point -- ModelC() is already the single
+# place callers pick a classifier by name, and a second interface just for
+# the backend would make callers care about an implementation detail that
+# isn't otherwise exposed. Follow the same pattern as _build_dl_model()
+# below: import torch lazily inside the builder, and raise an ImportError
+# pointing at `pip install mlmolprop[torch]` if it's missing.
 def _build_dl_model(
     n_features, hidden_layer_sizes, dropout, optimizer, learning_rate, nesterov
 ):
-    from keras import Sequential, optimizers
-    from keras.layers import Dense, Dropout, Input
+    try:
+        from keras import Sequential, optimizers
+        from keras.layers import Dense, Dropout, Input
+    except ImportError as e:
+        raise ImportError(
+            "M='dl' requires the optional 'dl' extra (keras plus a backend "
+            "engine such as tensorflow). Install with: pip install 'mlmolprop[dl]'"
+        ) from e
 
     model = Sequential()
     model.add(Input(shape=(n_features,)))

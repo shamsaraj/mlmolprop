@@ -21,14 +21,9 @@ dependencies = [
   "matplotlib>=3.10",
   "scikit-learn>=1.9",
   "scipy>=1.18",
-  "rdkit>=2025.9.5",
+  "rdkit>=2025.9.3",
   "reportlab>=5.0",
   "svglib>=2.1",
-  "keras>=3.15",
-  # Not directly imported -- keras itself is (model.py, the M="dl" path),
-  # but keras 3 needs a backend engine to run and doesn't name one; this
-  # is the backend environment.yml was actually tested against.
-  "tensorflow>=2.18",
   "lime>=0.2",
 ]
 
@@ -39,6 +34,15 @@ test = ["pytest>=8.0"]
 # isn't in environment.yml, so there's no tested version to anchor a lower
 # bound to.
 viz = ["graphviz"]
+# keras/tensorflow are used only by model.py's M="dl" path (lazy-imported
+# there with an informative error if missing; nothing else in the package
+# needs them). Kept separate from the torch extra since the two deep
+# learning stacks are a large combined install and coexist badly in one
+# environment more often than not -- most users of this package want the
+# classical models and shouldn't have to pull in either.
+dl = ["tensorflow>=2.16", "keras>=3.0"]
+torch = ["torch>=2.0"]
+all = ["mlmolprop[dl,torch]"]
 
 [project.urls]
 "Homepage" = "https://github.com/shamsaraj/mlmolprop"
