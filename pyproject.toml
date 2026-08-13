@@ -23,10 +23,6 @@ dependencies = [
   "scipy>=1.18",
   "rdkit>=2025.9.3",
   "reportlab>=5.0",
-  # reportlab doesn't pull in its own raster backend -- without this,
-  # svg_files_to_png() and RDimage/moltosvg crash on a plain pip install
-  # with "cannot import desired renderPM backend rlPyCairo".
-  "rlPyCairo>=0.4.0",
   "svglib>=2.1",
   "lime>=0.2",
 ]
@@ -46,7 +42,15 @@ viz = ["graphviz"]
 # classical models and shouldn't have to pull in either.
 dl = ["tensorflow>=2.16", "keras>=3.0"]
 torch = ["torch>=2.0"]
-all = ["mlmolprop[dl,torch]"]
+# rlPyCairo backs reportlab's raster rendering, used only by
+# image.py::svg_files_to_png() and molprep.py::RDimage() (both
+# lazy-imported, with an informative error if missing). It has no
+# prebuilt PyPI wheel on any platform -- installing it means building
+# pycairo from source against a system Cairo + pkg-config, which a bare
+# `pip install` can't provide. conda-forge ships a prebuilt binary
+# instead (see environment.yml), and that's the recommended path.
+image = ["rlPyCairo>=0.4.0"]
+all = ["mlmolprop[dl,torch,image]"]
 
 [project.urls]
 "Homepage" = "https://github.com/shamsaraj/mlmolprop"

@@ -110,6 +110,7 @@ def test_images_to_dataframe_no_matching_files_raises(cwd_tmp_path):
 
 
 def test_svg_files_to_png(cwd_tmp_path):
+    pytest.importorskip("rlPyCairo")
     svg = highlight("c1ccccc1", "c1ccccc1")
     with open("mol.svg", "w") as f:
         f.write(svg)

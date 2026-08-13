@@ -48,6 +48,12 @@ pip install -e .
 > it forces `numpy<2`, which breaks scikit-learn. conda-forge is
 > recommended for the `dl` extra on that platform instead.
 
+> **Note:** `pip install "mlmolprop[image]"` (needed for
+> `svg_files_to_png()` and `RDimage()`) builds `rlPyCairo`'s `pycairo`
+> dependency from source against a system Cairo install -- there's no
+> prebuilt PyPI wheel on any platform. conda-forge is recommended for
+> this extra instead: `conda install -c conda-forge rlpycairo`.
+
 ---
 
 ## Usage Overview

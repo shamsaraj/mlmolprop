@@ -110,6 +110,7 @@ def test_mol_enumerate_invalid_format_raises(cwd_tmp_path):
 
 
 def test_rdimage_does_not_mutate_callers_molecules(cwd_tmp_path):
+    pytest.importorskip("rlPyCairo")
     mol = Chem.MolFromSmiles("CCO")
     mol.SetProp("_Name", "ethanol")
     prepared = mol_prep(mol)

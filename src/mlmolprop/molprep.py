@@ -1,6 +1,7 @@
 """Prepare molecules with RDKit: salt removal, 3D embedding, and rendering.
 
-Requires cairo (``conda install -c conda-forge cairo``) for SVG rendering.
+RDimage() additionally requires the optional 'image' extra (rlPyCairo);
+see its docstring.
 """
 
 from __future__ import annotations
@@ -179,7 +180,25 @@ def RDimage(mols, output_dir: str) -> None:
 
     Operates on copies, so the caller's molecules (including any 3D
     conformer) are left untouched.
+
+    Requires the optional 'image' extra (rlPyCairo, reportlab's raster
+    backend). It has no prebuilt PyPI wheel and needs a system Cairo
+    install to build from source -- install with:
+    ``pip install 'mlmolprop[image]'``, or use conda-forge instead, which
+    ships a prebuilt binary: ``conda install -c conda-forge rlpycairo``.
     """
+    try:
+        import rlPyCairo  # noqa: F401
+    except ImportError as e:
+        raise ImportError(
+            "RDimage() requires the optional 'image' extra (rlPyCairo, "
+            "reportlab's raster backend). It has no prebuilt PyPI wheel "
+            "and needs a system Cairo install to build from source -- "
+            "install with: pip install 'mlmolprop[image]', or use "
+            "conda-forge instead, which ships a prebuilt binary: "
+            "conda install -c conda-forge rlpycairo"
+        ) from e
+
     from reportlab.graphics import renderPM
     from svglib.svglib import svg2rlg
 

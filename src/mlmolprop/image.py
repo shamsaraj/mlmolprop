@@ -16,6 +16,18 @@ from svglib.svglib import svg2rlg
 
 def svg_files_to_png(files, output_dir: str = ".") -> None:
     """Convert each SVG file in ``files`` to a same-named PNG in ``output_dir``."""
+    try:
+        import rlPyCairo  # noqa: F401
+    except ImportError as e:
+        raise ImportError(
+            "svg_files_to_png() requires the optional 'image' extra "
+            "(rlPyCairo, reportlab's raster backend). It has no prebuilt "
+            "PyPI wheel and needs a system Cairo install to build from "
+            "source -- install with: pip install 'mlmolprop[image]', or "
+            "use conda-forge instead, which ships a prebuilt binary: "
+            "conda install -c conda-forge rlpycairo"
+        ) from e
+
     for file in files:
         drawing = svg2rlg(file)
         name = os.path.splitext(os.path.basename(file))[0]
