@@ -345,7 +345,7 @@ def test_modelc_dl_actually_trains(clas_train_test):
     # since accuracy on a tiny stochastic net is inherently noisy run to
     # run (unlike Keras's own weight init, which is fully determined by
     # the seed) and isn't what this bug actually affected.
-    import keras
+    keras = pytest.importorskip("keras")
 
     from mlmolprop.model import _build_dl_model
 

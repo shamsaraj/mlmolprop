@@ -23,6 +23,10 @@ dependencies = [
   "scipy>=1.18",
   "rdkit>=2025.9.3",
   "reportlab>=5.0",
+  # reportlab doesn't pull in its own raster backend -- without this,
+  # svg_files_to_png() and RDimage/moltosvg crash on a plain pip install
+  # with "cannot import desired renderPM backend rlPyCairo".
+  "rlPyCairo>=0.4.0",
   "svglib>=2.1",
   "lime>=0.2",
 ]
