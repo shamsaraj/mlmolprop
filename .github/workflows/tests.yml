@@ -22,3 +22,19 @@ jobs:
       - name: Run test suite
         shell: bash -el {0}
         run: pytest -v
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up conda environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          environment-file: environment.yml
+          activate-environment: mlmolprop
+          miniforge-version: latest
+
+      - name: Ruff check
+        shell: bash -el {0}
+        run: ruff check .
