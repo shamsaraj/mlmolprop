@@ -43,6 +43,11 @@ Or install directly with pip:
 pip install -e .
 ```
 
+> **Note:** on Intel macOS, `pip install "mlmolprop[dl]"` will pull in
+> TensorFlow 2.16, the newest version PyPI publishes for that platform --
+> it forces `numpy<2`, which breaks scikit-learn. conda-forge is
+> recommended for the `dl` extra on that platform instead.
+
 ---
 
 ## Usage Overview
