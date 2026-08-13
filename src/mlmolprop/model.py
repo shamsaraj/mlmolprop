@@ -584,8 +584,10 @@ def _build_dl_model(
         from keras.layers import Dense, Dropout, Input
     except ImportError as e:
         raise ImportError(
-            "M='dl' requires the optional 'dl' extra (keras plus a backend "
-            "engine such as tensorflow). Install with: pip install 'mlmolprop[dl]'"
+            "M='dl' requires the optional 'dl' extra (keras plus the "
+            "PyTorch backend engine). Install with: pip install "
+            "'mlmolprop[dl]', and set the environment variable "
+            "KERAS_BACKEND=torch before running."
         ) from e
 
     model = Sequential()

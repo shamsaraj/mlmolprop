@@ -42,7 +42,7 @@ jobs:
   pip-install-smoke-test:
     # Verifies the package installs from plain PyPI with no conda-forge
     # fallback, and that the base install (no extras) doesn't pull in
-    # keras/tensorflow/torch -- catches a floor that only resolves via
+    # keras/torch -- catches a floor that only resolves via
     # conda-forge, or a dependency that should be optional but isn't.
     runs-on: ubuntu-latest
     steps:

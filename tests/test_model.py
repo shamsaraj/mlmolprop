@@ -382,7 +382,7 @@ def test_modelc_dl_actually_trains(clas_train_test):
 
 
 def test_modelc_dl_missing_keras_raises_informative_error(monkeypatch, clas_train_test):
-    # keras/tensorflow live behind the optional "dl" extra; if they're not
+    # keras/torch live behind the optional "dl" extra; if they're not
     # installed, M="dl" should fail with a clear message pointing at how to
     # get them, not a bare ImportError from deep inside _build_dl_model.
     X_train, y_train, X_test, y_test, v_names = clas_train_test

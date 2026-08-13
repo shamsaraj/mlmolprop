@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mlmolprop"
-version = "1.0.0"
+version = "1.1.0"
 authors = [
   { name="Jamal Shamsara", email="jshamsara@yahoo.com" }
 ]
@@ -34,13 +34,19 @@ test = ["pytest>=8.0"]
 # isn't in environment.yml, so there's no tested version to anchor a lower
 # bound to.
 viz = ["graphviz"]
-# keras/tensorflow are used only by model.py's M="dl" path (lazy-imported
-# there with an informative error if missing; nothing else in the package
-# needs them). Kept separate from the torch extra since the two deep
-# learning stacks are a large combined install and coexist badly in one
-# environment more often than not -- most users of this package want the
-# classical models and shouldn't have to pull in either.
-dl = ["tensorflow>=2.16", "keras>=3.0"]
+# keras is used only by model.py's M="dl" path (lazy-imported there with
+# an informative error if missing; nothing else in the package needs
+# it). Backed by PyTorch rather than TensorFlow -- TensorFlow's PyPI
+# wheels are capped at 2.16.2 on Intel macOS and that build pulls in a
+# numpy<2 pin that breaks the rest of this project's dependencies.
+# PyTorch has no such conflict, and Keras 3's torch backend is verified
+# (see tests/test_model.py::test_modelc_dl_actually_trains) to build,
+# train, and predict the same way the tensorflow backend did. Requires
+# KERAS_BACKEND=torch to be set -- see README.
+dl = ["keras>=3.0", "torch>=2.0"]
+# Reserved for a future M="dl_torch" path that uses torch directly, with
+# no keras dependency -- unused by any code yet, kept as its own extra
+# so that path won't need to pull in keras once it exists.
 torch = ["torch>=2.0"]
 # rlPyCairo backs reportlab's raster rendering, used only by
 # image.py::svg_files_to_png() and molprep.py::RDimage() (both

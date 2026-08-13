@@ -3,7 +3,7 @@
 **mlmolprop** is a modular Python framework for cheminformatics and QSAR (Quantitative Structure–Activity Relationship) modeling.
 It enables molecular descriptor generation, fingerprint computation, dataset preprocessing, feature selection, and machine learning analysis — all within one workflow.
 
-This toolkit integrates **RDKit**, **scikit-learn**, **Keras/TensorFlow**, **LIME**, and **matplotlib** to streamline molecular data preparation, model building, and interpretation.
+This toolkit integrates **RDKit**, **scikit-learn**, **Keras/PyTorch**, **LIME**, and **matplotlib** to streamline molecular data preparation, model building, and interpretation.
 
 ---
 
@@ -43,10 +43,16 @@ Or install directly with pip:
 pip install -e .
 ```
 
-> **Note:** on Intel macOS, `pip install "mlmolprop[dl]"` will pull in
-> TensorFlow 2.16, the newest version PyPI publishes for that platform --
-> it forces `numpy<2`, which breaks scikit-learn. conda-forge is
-> recommended for the `dl` extra on that platform instead.
+> **Note:** the `dl` extra (`M="dl"` in `Model`/`ModelC`) is built on
+> Keras 3 running on the PyTorch backend -- set `KERAS_BACKEND=torch`
+> before using it. This path is tested and verified to build, train, and
+> predict the same way a TensorFlow backend would (see
+> `tests/test_model.py::test_modelc_dl_actually_trains`). On Intel
+> macOS, `pip install "mlmolprop[dl]"` will pull in PyTorch 2.2.2, the
+> newest version PyPI publishes for that platform -- it predates the
+> PyTorch API Keras 3's torch backend needs and fails to import.
+> conda-forge is recommended for the `dl` extra on that platform
+> instead, which has PyTorch 2.13+.
 
 > **Note:** `pip install "mlmolprop[image]"` (needed for
 > `svg_files_to_png()` and `RDimage()`) builds `rlPyCairo`'s `pycairo`
