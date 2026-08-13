@@ -13,8 +13,9 @@ conda env `mlmolprop`. Editable install. Never install mlmolprop-lab here.
 ## Release checklist
 1. Tests and ruff pass.
 2. Bump version in pyproject.toml.
-3. Commit, push.
-4. Tag matching the version, push the tag.
-5. Write a short GitHub Release note.
-6. If a lab module was released, delete it from lab.
-7. Update the lab pin and re-run lab tests.
+3. Bump version in CITATION.cff to match.
+4. Commit, push.
+5. Tag matching the version, push the tag.
+6. Write a short GitHub Release note.
+7. If a lab module was released, delete it from lab.
+8. Update the lab pin and re-run lab tests.
