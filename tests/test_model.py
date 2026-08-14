@@ -134,15 +134,6 @@ def test_model_every_regressor_type(reg_train_test, M):
     assert analysis is not None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug: Model() sets `f = 0` once near the top and never "
-        "reassigns it -- basic.F() exists and computes a real F-statistic "
-        "but Model() never calls it. Every single Model() result reports "
-        "F=0.0 unconditionally, for every model type."
-    ),
-)
 @pytest.mark.parametrize("M", ["mlr", "rf", "pls"])
 def test_model_f_statistic_is_never_hardcoded_zero(reg_train_test, M):
     # Property: a real F-statistic landing on exactly 0.0 is vanishingly
@@ -156,10 +147,6 @@ def test_model_f_statistic_is_never_hardcoded_zero(reg_train_test, M):
     assert result["F"] != 0.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="known bug, same as test_model_f_statistic_is_never_hardcoded_zero",
-)
 def test_model_f_statistic_near_null_value_for_unrelated_data(rng, cwd_tmp_path):
     # Edge case: y with essentially zero real relationship to x. A hardcoded
     # 0.0 happens to be numerically plausible near the null-hypothesis
@@ -182,10 +169,6 @@ def test_model_f_statistic_near_null_value_for_unrelated_data(rng, cwd_tmp_path)
     assert result["F"] == pytest.approx(expected_f)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="known bug, same as test_model_f_statistic_is_never_hardcoded_zero",
-)
 def test_model_f_statistic_known_answer_matches_basic_F(reg_train_test):
     # Known-answer case: the correct value is directly computable via
     # basic.F(), which already exists and is independently tested
@@ -201,19 +184,6 @@ def test_model_f_statistic_known_answer_matches_basic_F(reg_train_test):
     assert result["F"] == pytest.approx(expected_f)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug: for M='nn', Variable Importance is computed as "
-        "np.dot(model.coefs_[0], model.coefs_[1]) -- only the first two "
-        "weight matrices (input -> first hidden layer -> second hidden "
-        "layer). The default hidden_layer_sizes has 3 hidden layers, so "
-        "coefs_ always has 4 matrices; layers 3 and the output layer are "
-        "silently ignored. The result is also the wrong shape: "
-        "(n_features, hidden_layer_2_size) instead of one importance "
-        "value per feature. Same bug in ModelC()."
-    ),
-)
 def test_model_nn_variable_importance_has_one_value_per_feature(reg_train_test):
     # Property: "Variable Importance" should have exactly one column (one
     # value per feature), not one column per unit in the second hidden
@@ -446,20 +416,6 @@ def _parse_ef(captured_stdout: str) -> dict:
     return ef
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug: COUNT() inside rocc() takes the literal first "
-        "int(len(y)*percent) rows of y for its enrichment-factor "
-        "calculation -- it never sorts by the score x first. Enrichment "
-        "factor is only meaningful for the top-scoring fraction, so the "
-        "reported EF1/EF2/EF10/EF20/EF50 silently depend on whatever row "
-        "order the caller happened to pass in, not on x at all. The "
-        "ROC/AUC part of the same function is unaffected, since "
-        "sklearn.metrics.roc_curve sorts internally -- only this "
-        "hand-rolled loop ignores x."
-    ),
-)
 def test_rocc_enrichment_factor_is_invariant_to_row_order(rng, capsys):
     # Property: EF is defined in terms of (score, label) pairs, not row
     # position, so permuting the rows together must not change the printed
@@ -480,17 +436,6 @@ def test_rocc_enrichment_factor_is_invariant_to_row_order(rng, capsys):
     assert ef_original == ef_shuffled
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug, same root cause as "
-        "test_rocc_enrichment_factor_is_invariant_to_row_order: with a "
-        "perfect classifier (AUC=1.0) whose actives happen to sit at the "
-        "END of y's row order, every EF comes out 0.0 -- self-contradictory "
-        "with AUC=1.0, since a perfect classifier's top-scored fraction is "
-        "by definition all actives."
-    ),
-)
 def test_rocc_enrichment_factor_not_contradicted_by_perfect_auc(capsys):
     # Edge case: actives have the 10 highest scores (perfect separation,
     # AUC=1.0) but are placed at the END of y's positional order, so a

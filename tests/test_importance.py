@@ -64,14 +64,6 @@ def _spy_selected_features(monkeypatch):
     return captured
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug: `selected = top_features[: n_features + 1]` plots "
-        "n_features + 1 features, not n_features -- asking for 4 (the "
-        "documented default) plots 5."
-    ),
-)
 def test_partial_plots_exactly_n_features(monkeypatch, five_feature_dataset):
     # Property: the number of features actually plotted must equal
     # n_features, for any n_features less than the total available.
@@ -98,10 +90,6 @@ def test_partial_n_features_equal_to_total_does_not_overflow(monkeypatch, five_f
     assert len(captured["features"]) == 5
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="known bug, same as test_partial_plots_exactly_n_features",
-)
 def test_partial_known_answer_selects_top_ranked_features(monkeypatch, five_feature_dataset):
     # Known-answer case: 5 features with distinct importance scores given
     # in scrambled (non-sorted) index order -- confirms both that sorting

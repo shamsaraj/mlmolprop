@@ -103,17 +103,6 @@ def test_f_statistic_known_answer_matches_textbook_anova_formula():
     assert F(y, pred, k) == pytest.approx(f_expected)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug: F() computes mse = press(obs, pred) / (n - k - 1) with "
-        "no guard on the denominator, unlike its sibling RMSEP_CV_C() which "
-        "explicitly raises ValueError for the identical 'not enough "
-        "observations for k predictors' condition (denom <= 0). When "
-        "n - k - 1 < 0, F() silently returns a negative number instead of "
-        "erroring -- a negative F-ratio is not a valid statistic."
-    ),
-)
 def test_f_statistic_insufficient_degrees_of_freedom_raises():
     with pytest.raises(ValueError):
         F([1.0, 2.0, 3.0], [1.1, 2.2, 2.7], k=3)

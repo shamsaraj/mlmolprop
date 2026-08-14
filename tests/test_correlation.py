@@ -46,21 +46,6 @@ def test_find_correlation_invalid_threshold_raises(feature_frame):
         find_correlation(feature_frame, threshold=0)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug: once a column is flagged as someone else's 'later "
-        "match' (added to already_flagged), it's skipped as a seed itself "
-        "-- its own correlations are never independently checked. So two "
-        "columns that are directly, strongly correlated with each other "
-        "can both survive, if each was already separately 'claimed' by a "
-        "different, unrelated seed column before their mutual relationship "
-        "was ever examined. Constructed via an explicit target correlation "
-        "matrix (X~A=0.96, A~B=0.94, Y~B=0.93, A~Y=0.77, X~B just under "
-        "0.9) so X claims A and Y claims B before A~B itself is checked; "
-        "verified reproducible at rng seed 0."
-    ),
-)
 def test_find_correlation_no_two_survivors_exceed_threshold(rng):
     import pandas as pd
 

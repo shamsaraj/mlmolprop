@@ -70,7 +70,17 @@ def highlight(
     match_atoms = list(
         mol.GetSubstructMatch(rdkit.Chem.MolFromSmarts(highlight_smarts))
     )
+    match_atoms_set = set(match_atoms)
     colors = {atom: (1, 0.35, 0.35) for atom in match_atoms}
+    # Atom indices and bond indices are different index spaces -- a bond is
+    # only part of the match if both the atoms it connects are.
+    match_bonds = [
+        bond.GetIdx()
+        for bond in mol.GetBonds()
+        if bond.GetBeginAtomIdx() in match_atoms_set
+        and bond.GetEndAtomIdx() in match_atoms_set
+    ]
+    bond_colors = {bond: (1, 0.35, 0.35) for bond in match_bonds}
 
     drawer = rdMolDraw2D.MolDraw2DSVG(*size)
     opts = drawer.drawOptions()
@@ -80,8 +90,8 @@ def highlight(
         mol,
         highlightAtoms=match_atoms,
         highlightAtomColors=colors,
-        highlightBonds=match_atoms,
-        highlightBondColors=colors,
+        highlightBonds=match_bonds,
+        highlightBondColors=bond_colors,
     )
     drawer.FinishDrawing()
     return drawer.GetDrawingText().replace("svg:", "")

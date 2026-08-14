@@ -74,8 +74,11 @@ def F(obs, pred, k: int) -> float:
     """F-statistic (MSR / MSE) for a training-set regression with k predictors."""
     obs = np.asarray(obs, dtype=float)
     n = len(obs)
+    denom = n - k - 1
+    if denom <= 0:
+        raise ValueError(f"not enough observations ({n}) for k={k} predictors")
     msr = press_m(pred, np.mean(obs)) / k
-    mse = press(obs, pred) / (n - k - 1)
+    mse = press(obs, pred) / denom
     return msr / mse
 
 

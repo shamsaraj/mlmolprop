@@ -141,7 +141,7 @@ def partial(
     else:
         raise ValueError(f"kind must be 'reg' or 'class', got {kind!r}")
 
-    selected = top_features[: n_features + 1]
+    selected = top_features[:n_features]
     display = PartialDependenceDisplay.from_estimator(
         model, tr_x, features=selected, feature_names=selected
     )

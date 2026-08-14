@@ -66,7 +66,7 @@ from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.svm import SVC, SVR, LinearSVC, LinearSVR
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
-from .basic import RMSEP_CV_C, analyse, q2r2, r2test
+from .basic import RMSEP_CV_C, F, analyse, q2r2, r2test
 
 
 def _distinct_colors(count: int) -> list:
@@ -488,7 +488,7 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo"):
     Pearson = stats.pearsonr(ytest, y_predict_test)
     q2f2 = r2test(ytest, y_predict_test, ytest)
     model_mse_test = mean_squared_error(y_predict_test, ytest)
-    f = 0
+    f = F(y, y_predict_train, k=len(v_names))
 
     List = None
     if cv != "off":
@@ -517,8 +517,19 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo"):
     else:
         try:
             if M == "nn":
-                VI = model.coefs_
-                VI = np.dot(VI[0], VI[1])
+                # "Connection weights" importance (Olden & Jackson, 2002,
+                # Ecological Modelling 154:135-150): the product of all
+                # weight matrices, input -> ... -> output, sums the product
+                # of weights along every path through the network. This is
+                # only the network's *true* input-output sensitivity if
+                # every activation is the identity function; sklearn's
+                # MLPRegressor/MLPClassifier default to "relu" here (not
+                # overridden above), so this ignores every ReLU threshold
+                # and is a rough linear surrogate, not an exact value --
+                # one that gets rougher the more hidden layers there are.
+                # Treat it as directional (which features rank higher),
+                # not as a precise coefficient.
+                VI = np.linalg.multi_dot(model.coefs_)
             elif M in ("rf", "tree", "ex", "gb", "ada"):
                 VI = model.feature_importances_
             elif M == "pls":
@@ -914,8 +925,9 @@ def ModelC(
         else:
             VI = ""
     elif M == "nn":
-        VI = model.coefs_
-        VI = np.dot(VI[0], VI[1])
+        # "Connection weights" importance -- see the fuller note in Model()
+        # above. Rough linear surrogate (ignores ReLU), directional only.
+        VI = np.linalg.multi_dot(model.coefs_)
     elif M in ("qua", "kn", "gu", "bg", "rn") or M == "gunb" or M == "cnb" or M == "dl":
         VI = ""
     elif M == "rg":
@@ -1115,6 +1127,12 @@ def rocc(
 ):
     """Plot an ROC curve and print early-recognition enrichment factors (EF1/2/10/20/50)."""
 
+    # Enrichment factor is defined over the top-scoring fraction, so sort by
+    # score x (descending) before taking the first N rows -- COUNT() below
+    # just takes rows in whatever order it's handed.
+    order = np.argsort(-np.asarray(x))
+    y_by_score = pd.Series(np.asarray(y)[order])
+
     def COUNT(col, label, percent=1):
         n = 0
         t = int(len(col) * percent)
@@ -1124,10 +1142,10 @@ def rocc(
         return n
 
     total = float(len(y))
-    baseline = COUNT(y, l, percent=1) / total
+    baseline = COUNT(y_by_score, l, percent=1) / total
     ef_percents = {"EF1": 0.01, "EF2": 0.02, "EF10": 0.1, "EF20": 0.2, "EF50": 0.5}
     for name, percent in ef_percents.items():
-        rate = COUNT(y, l, percent=percent) / (total * percent)
+        rate = COUNT(y_by_score, l, percent=percent) / (total * percent)
         print(rate / baseline, f" --> {name}")
 
     if ycat == "cat":

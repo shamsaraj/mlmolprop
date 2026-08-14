@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 
@@ -31,18 +30,43 @@ def find_correlation(data: pd.DataFrame, threshold: float = 0.9) -> list[str]:
         raise ValueError(f"threshold must be in (0, 1], got {threshold}")
 
     data = pd.DataFrame(data)
+    columns = list(data.columns)
     corr_mat = data.corr().abs()
-    lower_triangle = pd.DataFrame(
-        np.tril(corr_mat, k=-1), index=corr_mat.index, columns=corr_mat.columns
-    )
 
-    already_flagged: set[str] = set()
+    # Union-find over pairs whose correlation exceeds threshold, so columns
+    # linked only transitively (A~B and B~C both exceed threshold, even if
+    # A~C doesn't) end up in the same cluster rather than being resolved as
+    # two independent pairs that can each keep a representative that turns
+    # out to be correlated with the other pair's representative.
+    parent = {c: c for c in columns}
+
+    def find(c: str) -> str:
+        while parent[c] != c:
+            parent[c] = parent[parent[c]]
+            c = parent[c]
+        return c
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i, a in enumerate(columns):
+        for b in columns[i + 1 :]:
+            if corr_mat.loc[a, b] > threshold:
+                union(a, b)
+
+    clusters: dict[str, list[str]] = {}
+    for c in columns:
+        clusters.setdefault(find(c), []).append(c)
+
     to_remove: list[str] = []
-    for column in lower_triangle.columns:
-        group = lower_triangle.index[lower_triangle[column] > threshold].tolist()
-        if group and column not in already_flagged:
-            already_flagged.update(group)
-            group.append(column)
-            to_remove.extend(group[1:])
+    for members in clusters.values():
+        if len(members) > 1:
+            # Keep the last column in original order, matching this
+            # function's existing convention for a simple two-column match
+            # (the earlier column is removed, the later one kept).
+            survivor = members[-1]
+            to_remove.extend(m for m in members if m != survivor)
 
     return to_remove

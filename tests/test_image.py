@@ -28,18 +28,6 @@ def _spy_highlight_bonds(monkeypatch):
     return captured
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug: highlight() passes `highlightBonds=match_atoms` -- the "
-        "matched *atom* indices are reused directly as *bond* indices, "
-        "which is a different index space. Every index actually highlighted "
-        "as a bond should connect two atoms that are both in the match; "
-        "reusing atom indices as bond indices highlights unrelated bonds "
-        "(or, when the match is large enough, an out-of-range bond index "
-        "that doesn't exist at all)."
-    ),
-)
 def test_highlight_bonds_only_connect_matched_atoms(monkeypatch):
     # Property: propane-in-butane match -- atoms 0,1,2 matched, real
     # connecting bonds are only bond 0 (0-1) and bond 1 (1-2). Every
@@ -55,28 +43,11 @@ def test_highlight_bonds_only_connect_matched_atoms(monkeypatch):
         assert bond.GetBeginAtomIdx() in match_atoms and bond.GetEndAtomIdx() in match_atoms
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug, same root cause as test_highlight_bonds_only_connect_"
-        "matched_atoms: matching the whole molecule against itself gives a "
-        "match_atoms list as long as the atom count, which can exceed the "
-        "valid bond-index range entirely (pentane: 5 atoms but only 4 "
-        "bonds). Reusing atom indices as bond indices then hands RDKit an "
-        "out-of-range bond index -- this currently crashes with an "
-        "RDKit-internal ValueError instead of drawing (or raising a clear, "
-        "documented error)."
-    ),
-)
 def test_highlight_full_molecule_match_does_not_crash():
     svg = highlight("CCCCC", "CCCCC", size=(200, 200))
     assert "<svg" in svg
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="known bug, same as test_highlight_bonds_only_connect_matched_atoms",
-)
 def test_highlight_known_answer_correct_bond_for_two_atom_match(monkeypatch):
     # Known-answer case: propane matched against "CC" -- RDKit's leftmost
     # match is atoms [0, 1], and the *only* real bond connecting two matched

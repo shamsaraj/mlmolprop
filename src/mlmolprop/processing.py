@@ -142,14 +142,21 @@ def data_prep(
         from sklearn.impute import SimpleImputer
 
         df = df.dropna(axis=1, how="all")
-        df1 = df.drop(NAME, axis=1)
+        # A row with a missing target has no real label to train/evaluate
+        # against -- drop it outright rather than letting the imputer below
+        # mean-impute a fake one.
+        df = df.dropna(subset=[TARGET])
+        target_values = df[TARGET]
+        df1 = df.drop([NAME, TARGET], axis=1)
         imputer = SimpleImputer(missing_values=np.nan, strategy="mean", copy=True).fit(
             df1
         )
         df2 = imputer.transform(df1)
-        df = pd.DataFrame(
-            df2, columns=list(df.columns.values[1:]), index=df.loc[:, NAME]
-        )
+        # Columns must come from df1 (the actual remaining columns, by
+        # label) -- df.columns.values[1:] assumes NAME is the first column
+        # and silently mislabels every column before it otherwise.
+        df = pd.DataFrame(df2, columns=df1.columns, index=df.loc[:, NAME])
+        df[TARGET] = target_values.values
 
     if rowremoval is not None:
         df.drop(df.loc[df[TARGET] == rowremoval].index, inplace=True)
@@ -262,7 +269,11 @@ def data_prep(
         if FS == "clas":
             selector = SelectKBest(f_classif, k=ndes).fit(X_train, y_train)
             p_values = selector.pvalues_
-            bonferroni = p_values * len(v_names2)
+            # Must be the feature count SelectKBest actually tested just
+            # now (X_train.shape[1]), not v_names2 -- that was fixed back
+            # when VarianceThreshold ran, and goes stale if Cor="on" drops
+            # correlated features afterward.
+            bonferroni = p_values * X_train.shape[1]
             bonferroni_df = pd.DataFrame(bonferroni, index=v_names, columns=["p value"])
             bonferroni_df.to_csv("Bonferroni.csv")
         else:

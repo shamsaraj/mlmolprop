@@ -131,19 +131,6 @@ def test_data_prep_imputation_v_names_correct_when_name_is_first_column(
     assert set(v_names) == {"featA", "featB"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug: with imputation='on', the post-imputation DataFrame's "
-        "columns are reassigned via `df.columns.values[1:]` -- positional, "
-        "'drop column 0' -- while the column actually dropped from the data "
-        "(df1 = df.drop(NAME, axis=1)) is NAME *by label*, wherever it "
-        "sits. Whenever NAME isn't literally the first CSV column, every "
-        "feature positioned before NAME gets silently relabeled one slot "
-        "off (its data survives, but under the wrong column name), and "
-        "NAME's own data ends up mislabeled as a real feature."
-    ),
-)
 @pytest.mark.parametrize("name_position", [1, 2, 3])
 def test_data_prep_imputation_v_names_correct_regardless_of_name_column_position(
     cwd_tmp_path, rng, name_position
@@ -165,32 +152,25 @@ def test_data_prep_imputation_v_names_correct_regardless_of_name_column_position
 
 def test_data_prep_imputation_name_last_column_extreme_case(cwd_tmp_path, rng):
     # Edge case: NAME as the very LAST column -- every other column sits
-    # before it, so (per the bug above) every single one gets shifted, not
-    # just one -- including TARGET itself. Verified directly: TARGET ends
-    # up holding featA's marker values (1000, 1001, ...), which are
-    # non-repeating, so the stratified train/test split downstream raises
-    # ValueError ("least populated class has only 1 member") instead of
-    # silently training on a corrupted target. A real, if noisier, failure
-    # mode of the same underlying bug -- this is the case where the bug
-    # happens to announce itself rather than staying silent.
+    # before it. Regression guard for the (now-fixed) column-mislabeling
+    # bug: v_names must still be {featA, featB}, and TARGET must keep its
+    # real 0/1 activity values rather than being overwritten by featA's
+    # (1000+) marker values -- which used to make the stratified split
+    # raise "least populated class has only 1 member" instead of
+    # completing normally.
     csv_path = "data.csv"
     _make_name_position_csv(csv_path, name_position=3, rng=rng)
 
-    with pytest.raises(ValueError, match="least populated class"):
-        data_prep(
-            csv_path, imputation="on", NAME="name", TARGET="activity",
-            mod="class", ratio=0.25, rs=0,
-        )
+    result = data_prep(
+        csv_path, imputation="on", NAME="name", TARGET="activity",
+        mod="class", ratio=0.25, rs=0,
+    )
+    v_names = result[4]
+    y_train, y_test = result[1], result[3]
+    assert set(v_names) == {"featA", "featB"}
+    assert set(np.concatenate([y_train, y_test])) <= {0, 1}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug, same as the other imputation/name-position tests -- "
-        "documented here with the exact hand-traced and directly-verified "
-        "values for one specific case."
-    ),
-)
 def test_data_prep_imputation_name_not_first_known_answer(cwd_tmp_path, rng):
     # Known-answer case, hand-traced and confirmed by direct execution:
     # columns [featA, name, activity, featB] (NAME at position 1) ->
@@ -355,17 +335,6 @@ def _bonferroni_multiplier(monkeypatch, csv_path, **data_prep_kwargs):
     return implied_multiplier, captured["n_at_fit"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug: the Bonferroni multiplier (bonferroni = p_values * "
-        "len(v_names2)) uses v_names2, the feature count from right after "
-        "VarianceThreshold filtering -- not the actual number of features "
-        "SelectKBest is testing at that point. When Cor='on' drops "
-        "correlated features first, the multiplier is left stale (too "
-        "large), over-correcting the reported significance."
-    ),
-)
 def test_data_prep_bonferroni_multiplier_matches_features_actually_tested(
     monkeypatch, bonferroni_dataset_csv
 ):
@@ -391,10 +360,6 @@ def test_data_prep_bonferroni_multiplier_correct_without_correlation_filtering(
     assert implied_multiplier == pytest.approx(n_at_fit)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="known bug, same as test_data_prep_bonferroni_multiplier_matches_features_actually_tested",
-)
 def test_data_prep_bonferroni_multiplier_known_answer(monkeypatch, bonferroni_dataset_csv):
     # Known-answer case, verified by direct execution: 4 features survive
     # VarianceThreshold (f1, f1_dup, f2, f3) -> v_names2 has length 4.
@@ -446,16 +411,6 @@ def test_data_prep_imputation_never_alters_present_target_values(
             assert all_y[name] == pytest.approx(value)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug: imputation='on' fits SimpleImputer on df1 = "
-        "df.drop(NAME, axis=1), which still includes TARGET. A row with a "
-        "genuinely missing label gets a fake mean-imputed label instead of "
-        "being dropped, and is silently trained/evaluated on as if it were "
-        "real ground truth."
-    ),
-)
 def test_data_prep_imputation_drops_rows_with_missing_target(
     dataset_with_missing_target_csv,
 ):
@@ -469,10 +424,6 @@ def test_data_prep_imputation_drops_rows_with_missing_target(
     assert "m3" not in all_names  # row 3 is the one with the missing target
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="known bug, same as test_data_prep_imputation_drops_rows_with_missing_target",
-)
 def test_data_prep_imputation_missing_target_known_answer(
     dataset_with_missing_target_csv,
 ):
