@@ -48,7 +48,10 @@ class Fingerprint:
         for mol in mols:
             fp = self.fp_fun(mol)
             if isinstance(fp, tuple):
-                fp = np.array(list(fp[0]))
+                # e.g. the real EState FingerprintMol, which returns
+                # (counts, sums) -- both halves are independently
+                # meaningful, so keep both rather than just fp[0].
+                fp = np.concatenate([np.asarray(part) for part in fp])
             elif isinstance(fp, rdkit.DataStructs.cDataStructs.ExplicitBitVect):
                 fp = explicit_bitvect_to_numpy_array(fp)
             elif isinstance(fp, rdkit.DataStructs.cDataStructs.IntSparseIntVect):
@@ -143,8 +146,10 @@ def make_fingerprints(
     Returns
     -------
     tuple[pandas.DataFrame, dict]
-        The fingerprint DataFrame (indexed by ``data_list[0]``) and the
-        Morgan bit-info dict populated for the last molecule processed.
+        The fingerprint DataFrame (indexed by ``data_list[0]``, columns
+        prefixed by fingerprint name -- e.g. ``"MACCS_0"`` -- when
+        ``type_f="all"`` computes more than one kind) and the Morgan
+        bit-info dict populated for the last molecule processed.
     """
     bit_info: dict = {}
     fp_list = _build_fp_list(type_f, length, radius, bit_info)
@@ -154,5 +159,14 @@ def make_fingerprints(
             print("doing", fp.name)
         fp.apply_fp(data)
 
-    df = pd.DataFrame(data=fp_list[0].x, index=data_list[0])
+    if len(fp_list) == 1:
+        df = pd.DataFrame(data=fp_list[0].x, index=data_list[0])
+    else:
+        columns = [
+            f"{fp.name}_{i}" for fp in fp_list for i in range(len(fp.x[0]))
+        ]
+        rows = [
+            np.concatenate([fp.x[row] for fp in fp_list]) for row in range(len(data))
+        ]
+        df = pd.DataFrame(data=rows, index=data_list[0], columns=columns)
     return df, bit_info

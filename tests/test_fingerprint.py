@@ -14,18 +14,6 @@ def test_make_fingerprints_valid_types(small_molecules, type_f):
     assert isinstance(bit_info, dict)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known bug: make_fingerprints(type_f='all') builds fp_list with "
-        "all 11 fingerprint kinds and calls apply_fp() on every one of "
-        "them, but the returned DataFrame is built from fp_list[0].x only "
-        "(the first kind, 'Atom pair') -- the other 10 are computed then "
-        "silently discarded. 'all' should be information-preserving "
-        "relative to computing each kind separately; it currently returns "
-        "1/11th of the data with no error."
-    ),
-)
 def test_make_fingerprints_all_preserves_every_fingerprint_type(small_molecules):
     names = [[m.GetProp("_Name") for m in small_molecules]]
     df, _ = make_fingerprints(small_molecules, names, length=64, type_f="all")
@@ -38,30 +26,13 @@ def test_make_fingerprints_all_preserves_every_fingerprint_type(small_molecules)
     assert df.shape[1] == expected_total_columns
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "likely bug (medium confidence): some RDKit fingerprint functions "
-        "(e.g. the real EState FingerprintMol, used internally by "
-        "make_fingerprints(type_f='all')) return a (counts, sums) tuple "
-        "rather than a single array/bitvector. Fingerprint.apply_fp "
-        "special-cases tuples as `fp = np.array(list(fp[0]))`, keeping only "
-        "the first element. Counts and sums are both standard, "
-        "independently meaningful halves of the EState fingerprint "
-        "definition (not e.g. one being auxiliary metadata), and nothing "
-        "documents why only counts are kept -- reads like the same class of "
-        "silent-data-drop as the type_f='all' bug, not a deliberate choice, "
-        "though there's no comment either way confirming intent."
-    ),
-)
 def test_fingerprint_class_apply_fp_keeps_both_halves_of_a_tuple_result(
     small_molecules,
 ):
-    # Edge case: some RDKit fingerprint functions (e.g. the real EState
-    # FingerprintMol, used internally by make_fingerprints(type_f="all"))
-    # return a (counts, sums) tuple rather than a single array/bitvector.
-    # Fingerprint.apply_fp special-cases tuples as `fp = np.array(list(fp[0]))`
-    # -- keeping only the first element and silently dropping the second.
+    # Some RDKit fingerprint functions (e.g. the real EState FingerprintMol,
+    # used internally by make_fingerprints(type_f="all")) return a
+    # (counts, sums) tuple rather than a single array/bitvector. Both halves
+    # are independently meaningful, so Fingerprint.apply_fp must keep both.
     from rdkit.Chem.EState.Fingerprinter import FingerprintMol
 
     raw = FingerprintMol(small_molecules[0])
