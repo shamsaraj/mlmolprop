@@ -336,12 +336,13 @@ def clus_uns(
             cnf3[0][1] = fnt
             cnf3[1][0] = fpt
 
-            plt.figure()
+            plt.figure(figsize=(8, 7))
             plot_confusion_matrix(
                 cnf, classes=["N1", "N0"], title="Confusion matrix - K-means"
             )
-            plt.ylabel("Predicted")
-            plt.xlabel("Actual")
+            plt.ylabel("Actual", fontsize=24, fontweight="bold")
+            plt.xlabel("Predicted", fontsize=24, fontweight="bold")
+            plt.tight_layout()
             plt.show()
 
 
@@ -1000,20 +1001,23 @@ def ModelC(
     testmetrics = metr(tpt, tnt, fpt, fnt)
     total = metr(tpt + tp, tnt + tn, fpt + fp, fnt + fn)
 
-    plt.figure()
+    plt.figure(figsize=(8, 7))
     plot_confusion_matrix(cnf, classes=["Active", "Inactive"], title="Train set")
-    plt.ylabel("Predicted", fontsize=12, fontweight="bold")
-    plt.xlabel("Actual", fontsize=12, fontweight="bold")
-    plt.figure()
+    plt.ylabel("Actual", fontsize=24, fontweight="bold")
+    plt.xlabel("Predicted", fontsize=24, fontweight="bold")
+    plt.tight_layout()
+    plt.figure(figsize=(8, 7))
     plot_confusion_matrix(
         cnf3, classes=["Active", "Inactive"], title="Cross-Validation"
     )
-    plt.ylabel("Predicted", fontsize=12, fontweight="bold")
-    plt.xlabel("Actual", fontsize=12, fontweight="bold")
-    plt.figure()
+    plt.ylabel("Actual", fontsize=24, fontweight="bold")
+    plt.xlabel("Predicted", fontsize=24, fontweight="bold")
+    plt.tight_layout()
+    plt.figure(figsize=(8, 7))
     plot_confusion_matrix(cnf2, classes=["Active", "Inactive"], title="Test set")
-    plt.ylabel("Predicted", fontsize=12, fontweight="bold")
-    plt.xlabel("Actual", fontsize=12, fontweight="bold")
+    plt.ylabel("Actual", fontsize=24, fontweight="bold")
+    plt.xlabel("Predicted", fontsize=24, fontweight="bold")
+    plt.tight_layout()
 
     y1 = pd.DataFrame(y, index=x.index, columns=["observed"])
     y2 = pd.DataFrame(y_predict_train, index=x.index, columns=["predicted"])
@@ -1075,11 +1079,12 @@ def plot_confusion_matrix(
         cm = cm.astype("float") / cm.sum(axis=1)[:, np.newaxis]
 
     plt.imshow(cm, interpolation="nearest", cmap=cmap)
-    plt.title(title, fontsize=26, fontweight="bold")
-    plt.colorbar()
+    plt.title(title, fontsize=40, fontweight="bold")
+    cbar = plt.colorbar()
+    cbar.ax.tick_params(labelsize=20)
     tick_marks = np.arange(len(classes))
-    plt.xticks(tick_marks, classes, rotation=45, fontsize=12)
-    plt.yticks(tick_marks, classes, fontsize=12)
+    plt.xticks(tick_marks, classes, rotation=45, fontsize=24)
+    plt.yticks(tick_marks, classes, fontsize=24)
 
     fmt = ".2f" if normalize else "d"
     thresh = cm.max() / 2.0
@@ -1090,13 +1095,13 @@ def plot_confusion_matrix(
             format(cm[i, j], fmt),
             horizontalalignment="center",
             color="white" if cm[i, j] > thresh else "black",
-            fontsize=30,
+            fontsize=44,
             fontweight="bold",
         )
 
     plt.tight_layout()
-    plt.ylabel("True label")
-    plt.xlabel("Predicted label")
+    plt.ylabel("True label", fontsize=24, fontweight="bold")
+    plt.xlabel("Predicted label", fontsize=24, fontweight="bold")
 
 
 def plot_w(x, y) -> None:
