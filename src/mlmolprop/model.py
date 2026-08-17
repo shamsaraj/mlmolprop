@@ -346,7 +346,7 @@ def clus_uns(
             plt.show()
 
 
-def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo"):
+def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", path="./"):
     """Fit a regression model and evaluate it on train/test/cross-validation.
 
     Parameters
@@ -355,6 +355,9 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo"):
     xtest, ytest : held-out feature matrix and target.
     v_names : list[str]
         Feature names (used for variable-importance reporting).
+    path : str, default "./"
+        Directory prefix for output files (``"train.csv"``, ``"test.csv"``) --
+        same convention as :func:`clus_uns`'s ``path`` parameter.
     params : dict or None
         Model-specific hyperparameters, passed straight through as
         keyword arguments to the underlying scikit-learn estimator's
@@ -567,11 +570,11 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo"):
     y1 = pd.DataFrame(y, index=x.index, columns=["observed"])
     y2 = pd.DataFrame(y_predict_train, index=x.index, columns=["predicted"])
     y3 = pd.concat([y1, y2], axis=1)
-    y3.to_csv("train.csv")
+    y3.to_csv(path + "train.csv")
     y4 = pd.DataFrame(ytest, index=xtest.index, columns=["observed"])
     y5 = pd.DataFrame(y_predict_test, index=xtest.index, columns=["predicted"])
     y6 = pd.concat([y4, y5], axis=1)
-    y6.to_csv("test.csv")
+    y6.to_csv(path + "test.csv")
 
     analysis = None
     if cv != "off":
@@ -629,6 +632,7 @@ def ModelC(
     M="tree",
     rs=None,
     cv="loo",
+    path="./",
 ):
     """Fit a binary classifier and evaluate it on train/test/cross-validation.
 
@@ -638,6 +642,9 @@ def ModelC(
     xtest, ytest : held-out feature matrix and target.
     v_names : list[str]
         Feature names (used for variable-importance reporting).
+    path : str, default "./"
+        Directory prefix for output files (``"train.csv"``, ``"test.csv"``) --
+        same convention as :func:`clus_uns`'s ``path`` parameter.
     M : str, default "tree"
         Which classifier to fit. One of: tree, nn, rf, ex, lsvm, svm,
         lr, ld, rg, per, pass, qua, sgdc, kn, rn, gu, gunb, cnb, bg, gb,
@@ -851,7 +858,7 @@ def ModelC(
     accuracy_score_train = accuracy_score(y, y_predict_train, normalize=True)
     accuracy_score_test = accuracy_score(ytest, y_predict_test, normalize=True)
 
-    if M != "dl":
+    if M != "dl" and cv != "off":
         ni = 2000
         if cv == "loo":
             loo = LeaveOneOut()
@@ -892,6 +899,11 @@ def ModelC(
             print(np.mean(accuracy_score_LOO_all), "<---- Mean of the accuracies")
             print(np.std(accuracy_score_LOO_all), "<---- STD of the accuracies")
     else:
+        # M="dl" never ran CV here to begin with; cv="off" skips it the same
+        # way Model() does (that function already supported "off" -- this
+        # one didn't: none of the loo/kf/kfr/shuff branches above matched
+        # "off", so `loo` was never assigned and loo.split(x) raised
+        # UnboundLocalError as soon as cv="off" was passed).
         accuracy_score_LOO = ""
 
     if M == "tree":
@@ -979,7 +991,10 @@ def ModelC(
         pra_test = ""
 
     cnf = confusion_matrix(y, y_predict_train)
-    cnf3 = confusion_matrix(ytests, ypreds)  # CV
+    # cv="off": ytests/ypreds stay empty (no CV loop ran above), so there's
+    # no CV confusion matrix to build -- matches Model()'s cv="off" leaving
+    # its own CV-derived `analysis` as None.
+    cnf3 = confusion_matrix(ytests, ypreds) if cv != "off" else None
     cnf2 = confusion_matrix(ytest, y_predict_test)
 
     # Binary classification only: reorder the 2x2 confusion matrix so
@@ -1002,14 +1017,17 @@ def ModelC(
     cnf2[1][1] = tnt
     cnf2[0][1] = fnt
     cnf2[1][0] = fpt
-    tnc, fpc, fnc, tpc = cnf3.ravel()
-    cnf3[0][0] = tpc
-    cnf3[1][1] = tnc
-    cnf3[0][1] = fnc
-    cnf3[1][0] = fpc
+    if cnf3 is not None:
+        tnc, fpc, fnc, tpc = cnf3.ravel()
+        cnf3[0][0] = tpc
+        cnf3[1][1] = tnc
+        cnf3[0][1] = fnc
+        cnf3[1][0] = fpc
+        cvmetrics = metr(tpc, tnc, fpc, fnc)
+    else:
+        cvmetrics = None
 
     trainmetrics = metr(tp, tn, fp, fn)
-    cvmetrics = metr(tpc, tnc, fpc, fnc)
     testmetrics = metr(tpt, tnt, fpt, fnt)
     total = metr(tpt + tp, tnt + tn, fpt + fp, fnt + fn)
 
@@ -1018,13 +1036,14 @@ def ModelC(
     plt.ylabel("Actual", fontsize=24, fontweight="bold")
     plt.xlabel("Predicted", fontsize=24, fontweight="bold")
     plt.tight_layout()
-    plt.figure(figsize=(8, 7))
-    plot_confusion_matrix(
-        cnf3, classes=["Active", "Inactive"], title="Cross-Validation"
-    )
-    plt.ylabel("Actual", fontsize=24, fontweight="bold")
-    plt.xlabel("Predicted", fontsize=24, fontweight="bold")
-    plt.tight_layout()
+    if cnf3 is not None:
+        plt.figure(figsize=(8, 7))
+        plot_confusion_matrix(
+            cnf3, classes=["Active", "Inactive"], title="Cross-Validation"
+        )
+        plt.ylabel("Actual", fontsize=24, fontweight="bold")
+        plt.xlabel("Predicted", fontsize=24, fontweight="bold")
+        plt.tight_layout()
     plt.figure(figsize=(8, 7))
     plot_confusion_matrix(cnf2, classes=["Active", "Inactive"], title="Test set")
     plt.ylabel("Actual", fontsize=24, fontweight="bold")
@@ -1034,11 +1053,11 @@ def ModelC(
     y1 = pd.DataFrame(y, index=x.index, columns=["observed"])
     y2 = pd.DataFrame(y_predict_train, index=x.index, columns=["predicted"])
     y3 = pd.concat([y1, y2], axis=1)
-    y3.to_csv("train.csv")
+    y3.to_csv(path + "train.csv")
     y4 = pd.DataFrame(ytest, index=xtest.index, columns=["observed"])
     y5 = pd.DataFrame(y_predict_test, index=xtest.index, columns=["predicted"])
     y6 = pd.concat([y4, y5], axis=1)
-    y6.to_csv("test.csv")
+    y6.to_csv(path + "test.csv")
 
     result = {
         "y1": y1,

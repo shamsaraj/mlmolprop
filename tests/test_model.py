@@ -293,6 +293,75 @@ def test_model_cv_off_does_not_crash_and_matches_cv_on(reg_train_test):
     assert r_off[0]["R2_test"] == r_loo[0]["R2_test"]
 
 
+def test_model_path_param_writes_into_given_directory(reg_train_test, cwd_tmp_path):
+    # regression guard: train.csv/test.csv were hardcoded to the caller's
+    # CWD; `path` (matching clus_uns()'s existing "directory prefix"
+    # convention) should redirect them instead of leaving them at CWD.
+    X_train, y_train, X_test, y_test, v_names = reg_train_test
+    out_dir = cwd_tmp_path / "run1"
+    out_dir.mkdir()
+    Model(
+        X_train, y_train, X_test, y_test, v_names,
+        params={"n_estimators": 3, "max_depth": 2, "max_features": 3},
+        M="rf", rs=0, cv="off", path=str(out_dir) + "/",
+    )
+    assert (out_dir / "train.csv").exists()
+    assert (out_dir / "test.csv").exists()
+    assert not (cwd_tmp_path / "train.csv").exists()
+    assert not (cwd_tmp_path / "test.csv").exists()
+
+
+def test_modelc_path_param_writes_into_given_directory(clas_train_test, cwd_tmp_path):
+    X_train, y_train, X_test, y_test, v_names = clas_train_test
+    out_dir = cwd_tmp_path / "run1"
+    out_dir.mkdir()
+    ModelC(
+        X_train, y_train, X_test, y_test, v_names,
+        params={"max_depth": 3, "n_estimators": 6},
+        M="rf", rs=0, cv="kf", path=str(out_dir) + "/",
+    )
+    assert (out_dir / "train.csv").exists()
+    assert (out_dir / "test.csv").exists()
+    assert not (cwd_tmp_path / "train.csv").exists()
+    assert not (cwd_tmp_path / "test.csv").exists()
+
+
+def test_modelc_cv_off_does_not_crash_and_leaves_cv_metrics_none(clas_train_test):
+    # regression guard: unlike Model(), none of ModelC's loo/kf/kfr/shuff
+    # branches matched "off", so `loo` was never assigned and loo.split(x)
+    # raised UnboundLocalError as soon as cv="off" was passed.
+    X_train, y_train, X_test, y_test, v_names = clas_train_test
+    result, fitted_model = ModelC(
+        X_train, y_train, X_test, y_test, v_names,
+        params={"max_depth": 3, "n_estimators": 6}, M="rf", rs=0, cv="off",
+    )
+    assert result["CV_metrics"] is None
+    assert result["confusion matrix_CV"] is None
+    assert result["accuracy_score_LOO"] == ""
+    # the officially reported model's own train/test metrics must be
+    # unaffected by skipping CV entirely
+    assert 0.0 <= result["test_AC"] <= 1.0
+    assert -1.0 <= result["test_MCC"] <= 1.0
+
+
+def test_modelc_cv_off_vs_cv_kf_report_same_train_test_metrics(clas_train_test):
+    # Property: CV is a separate diagnostic refit (model2 in the source) --
+    # skipping it must not change the officially reported model's own
+    # train/test metrics, mirroring test_model_cv_off_does_not_crash_and_matches_cv_on.
+    X_train, y_train, X_test, y_test, v_names = clas_train_test
+    rf_params = {"max_depth": 3, "n_estimators": 6}
+    r_off, _ = ModelC(
+        X_train, y_train, X_test, y_test, v_names,
+        params=rf_params, M="rf", rs=0, cv="off",
+    )
+    r_kf, _ = ModelC(
+        X_train, y_train, X_test, y_test, v_names,
+        params=rf_params, M="rf", rs=0, cv="kf",
+    )
+    assert r_off["test_MCC"] == r_kf["test_MCC"]
+    assert r_off["test_AC"] == r_kf["test_AC"]
+
+
 def test_model_invalid_name_raises_value_error(reg_train_test):
     X_train, y_train, X_test, y_test, v_names = reg_train_test
     with pytest.raises(ValueError):
