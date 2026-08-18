@@ -105,10 +105,23 @@ def analyse(ytrain, y_pred_train, ytest, y_pred_test, ycv1, ycv2, k: int) -> dic
     """
     n_train = len(ytrain)
     r2 = q2r2(ytrain, y_pred_train)
-    r2_adj = 1 - (((n_train - 1) / (n_train - k - 1)) * (1 - r2))
+    # Both R2_Adj and F encode classical OLS degrees-of-freedom (n > k+1, k
+    # literally-fit linear parameters) -- meaningful for M in {mlr, pls,
+    # lasso, ...}, but not a real constraint for RF/SVM/tree-style
+    # regressors, whose capacity isn't controlled by feature count the same
+    # way. Reporting NaN here instead of raising/dividing-by-zero mirrors
+    # ModelC(), which has no such constraint, and lets those model types run
+    # on any feature count.
+    if n_train - k - 1 > 0:
+        r2_adj = 1 - (((n_train - 1) / (n_train - k - 1)) * (1 - r2))
+    else:
+        r2_adj = float("nan")
     q2 = q2r2(ycv1, ycv2)
     r2_test = r2test(ytest, y_pred_test, ytrain)
-    f = F(ytrain, y_pred_train, k)
+    try:
+        f = F(ytrain, y_pred_train, k)
+    except ValueError:
+        f = float("nan")
     rmse_train = RMSEP_CV_C(ytrain, y_pred_train)
     mae_train = press_root(ytrain, y_pred_train) / n_train
     rmse_cv = RMSEP_CV_C(ycv1, ycv2)

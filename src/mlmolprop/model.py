@@ -491,7 +491,16 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
     Pearson = stats.pearsonr(ytest, y_predict_test)
     q2f2 = r2test(ytest, y_predict_test, ytest)
     model_mse_test = mean_squared_error(y_predict_test, ytest)
-    f = F(y, y_predict_train, k=len(v_names))
+    try:
+        f = F(y, y_predict_train, k=len(v_names))
+    except ValueError:
+        # F() encodes classical OLS degrees-of-freedom (n > k+1, k literally-fit
+        # linear parameters) -- a real constraint for M in {mlr, pls, lasso, ...},
+        # but not one that means anything for RF/SVM/tree-style regressors, whose
+        # capacity isn't controlled by feature count the same way. Reporting NaN
+        # here (rather than blocking the fit) matches ModelC(), which has no such
+        # constraint at all, and lets those model types run on any feature count.
+        f = float("nan")
 
     List = None
     if cv != "off":

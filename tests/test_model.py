@@ -1,5 +1,6 @@
 """Tests for mlmolprop.model -- parametrized across every supported model type."""
 
+import math
 import sys
 
 import numpy as np
@@ -132,6 +133,25 @@ def test_model_every_regressor_type(reg_train_test, M):
     assert "R2" in result
     assert cv_metrics is not None
     assert analysis is not None
+
+
+def test_model_reports_nan_f_instead_of_raising_when_features_exceed_rows(rng, cwd_tmp_path):
+    # regression guard: F()'s n > k+1 requirement is a classical OLS concept
+    # that doesn't mean anything for RF's capacity -- Model() used to
+    # propagate F()'s ValueError unconditionally for every M=, blocking any
+    # regressor (not just linear ones) from running when features >= rows.
+    n = 10
+    X = pd.DataFrame(rng.normal(size=(n, 15)), columns=[f"f{i}" for i in range(15)])
+    y = pd.Series(rng.normal(size=n))
+    X_train, y_train, X_test, y_test = X.iloc[:8], y.iloc[:8], X.iloc[8:], y.iloc[8:]
+
+    result, _, _, _ = Model(
+        X_train, y_train, X_test, y_test, list(X.columns),
+        params={"n_estimators": 3, "max_depth": 2, "max_features": 3},
+        M="rf", rs=0, cv="off",
+    )
+    assert math.isnan(result["F"])
+    assert result["R2"] is not None and not math.isnan(result["R2"])
 
 
 @pytest.mark.parametrize("M", ["mlr", "rf", "pls"])

@@ -1,5 +1,7 @@
 """Tests for mlmolprop.basic -- core QSAR statistics helpers."""
 
+import math
+
 import numpy as np
 import pytest
 
@@ -106,6 +108,21 @@ def test_f_statistic_known_answer_matches_textbook_anova_formula():
 def test_f_statistic_insufficient_degrees_of_freedom_raises():
     with pytest.raises(ValueError):
         F([1.0, 2.0, 3.0], [1.1, 2.2, 2.7], k=3)
+
+
+def test_analyse_reports_nan_instead_of_raising_when_k_exceeds_dof():
+    # regression guard: R2_Adj's division and the internal F() call both
+    # assume n_train > k+1 (classical OLS degrees of freedom) -- neither
+    # constraint is meaningful for non-OLS regressors (RF/SVM/trees), so
+    # analyse() should degrade to NaN rather than raising ZeroDivisionError
+    # (R2_Adj) or ValueError (F), matching Model()'s own handling of this.
+    ytrain = [1.0, 2.0, 3.0]
+    y_pred_train = [1.1, 2.2, 2.7]
+    result = analyse(ytrain, y_pred_train, [2.0], [2.1], ytrain, y_pred_train, k=3)
+    assert math.isnan(result["R2_Adj"])
+    assert math.isnan(result["F"])
+    # everything else must still compute normally
+    assert not math.isnan(result["R2"])
 
 
 def test_analyse_returns_expected_keys():
