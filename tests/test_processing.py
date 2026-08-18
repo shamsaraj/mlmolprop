@@ -449,6 +449,120 @@ def test_data_prep_remove_and_selection_params(dataset_csv):
     assert set(result2[4]) <= {"f1", "f2"}
 
 
+@pytest.fixture
+def features_and_activities(rng):
+    # Mimics make_fingerprints()'s actual return shape: a feature matrix
+    # indexed by molecule name, no NAME column of its own.
+    n = 60
+    names = [f"m{i}" for i in range(n)]
+    features = pd.DataFrame(
+        {"f1": rng.normal(size=n), "f2": rng.normal(size=n), "f3": rng.normal(size=n)},
+        index=names,
+    )
+    activities = pd.DataFrame({"name": names, "IC50": rng.integers(0, 2, size=n)})
+    return features, activities
+
+
+def test_data_prep_features_and_activities_matches_datafile_csv(
+    features_and_activities, cwd_tmp_path
+):
+    features, activities = features_and_activities
+
+    result_new = data_prep(
+        features=features, activities=activities, mod="class", ratio=0.25, rs=0,
+    )
+
+    merged = features.copy()
+    merged.index.name = "name"
+    merged = merged.reset_index().merge(activities, on="name")
+    merged.to_csv("merged.csv", index=False)
+    result_csv = data_prep("merged.csv", mod="class", ratio=0.25, rs=0)
+
+    X_train_new, y_train_new, X_test_new, y_test_new, v_names_new, *_ = result_new
+    X_train_csv, y_train_csv, X_test_csv, y_test_csv, v_names_csv, *_ = result_csv
+
+    assert v_names_new == v_names_csv
+    pd.testing.assert_frame_equal(X_train_new, X_train_csv)
+    pd.testing.assert_frame_equal(X_test_new, X_test_csv)
+    np.testing.assert_array_equal(y_train_new, y_train_csv)
+    np.testing.assert_array_equal(y_test_new, y_test_csv)
+
+
+def test_data_prep_features_reused_across_two_targets(rng, cwd_tmp_path):
+    n = 60
+    names = [f"m{i}" for i in range(n)]
+    features = pd.DataFrame(
+        {"f1": rng.normal(size=n), "f2": rng.normal(size=n)}, index=names,
+    )
+    # Two targets over different row subsets, like our 4 CYP pIC50 columns
+    # sharing one source file but different non-null molecule sets.
+    activities_a = pd.DataFrame(
+        {"name": names[:50], "target_a": rng.normal(size=50)}
+    )
+    activities_b = pd.DataFrame(
+        {"name": names[10:], "target_b": rng.normal(size=50)}
+    )
+
+    result_a = data_prep(
+        features=features, activities=activities_a, TARGET="target_a",
+        mod="reg", ratio=0.2, rs=0,
+    )
+    result_b = data_prep(
+        features=features, activities=activities_b, TARGET="target_b",
+        mod="reg", ratio=0.2, rs=0,
+    )
+
+    assert len(result_a[0]) + len(result_a[2]) == 50
+    assert len(result_b[0]) + len(result_b[2]) == 50
+
+
+def test_data_prep_features_indexed_by_name_without_reset(features_and_activities, cwd_tmp_path):
+    features, activities = features_and_activities
+    assert "name" not in features.columns  # precondition: index-only, as documented
+
+    result = data_prep(features=features, activities=activities, mod="class", ratio=0.25, rs=0)
+    X_train = result[0]
+    assert len(X_train) > 0
+
+
+def test_data_prep_features_as_csv_path(features_and_activities, cwd_tmp_path):
+    features, activities = features_and_activities
+    features_named = features.copy()
+    features_named.index.name = "name"
+    features_named.reset_index().to_csv("features.csv", index=False)
+
+    result = data_prep(
+        features="features.csv", activities=activities, mod="class", ratio=0.25, rs=0,
+    )
+    assert len(result[0]) > 0
+
+
+def test_data_prep_requires_datafile_or_features_and_activities():
+    with pytest.raises(ValueError):
+        data_prep()
+
+
+def test_data_prep_newset_accepts_features_and_activities(features_and_activities, cwd_tmp_path):
+    features, activities = features_and_activities
+    result = data_prep(features=features, activities=activities, mod="class", ratio=0.25, rs=0)
+    v_names2 = result[7]
+
+    # Score a new set through the features/activities path too -- no TARGET
+    # column in activities this time (unlabeled external set).
+    new_names = [f"n{i}" for i in range(5)]
+    new_features = pd.DataFrame(
+        {"f1": [0.1] * 5, "f2": [0.2] * 5, "f3": [0.3] * 5}, index=new_names,
+    )
+    new_activities = pd.DataFrame({"name": new_names})
+
+    X_new, y_new, org_v_names = data_prep(
+        features=new_features, activities=new_activities,
+        newset="on", v_names2=v_names2, org_v_names=v_names2,
+    )
+    assert y_new is None
+    assert len(X_new) == 5
+
+
 def test_variance_threshold_selector_drops_constant_column():
     df = pd.DataFrame({"a": [1, 2, 3, 4], "b": [5, 5, 5, 5]})
     out = VarianceThreshold_selector(df, threshold2=0)

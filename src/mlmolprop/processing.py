@@ -27,7 +27,9 @@ def _drop_all_zero_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def data_prep(
-    datafile,
+    datafile=None,
+    features=None,
+    activities=None,
     Scaled="off",
     Normal="off",
     FS="off",
@@ -52,7 +54,7 @@ def data_prep(
     selection=None,
     mod="class",
 ):
-    """Load a CSV dataset and run it through the standard QSAR preprocessing pipeline.
+    """Load a dataset and run it through the standard QSAR preprocessing pipeline.
 
     Steps: missing-value imputation, row removal by target value, column
     removal, one-hot encoding of categorical columns, then a train/test
@@ -66,6 +68,21 @@ def data_prep(
     computed using information from the test set. The prepared
     ``(X, y, ...)`` tuple is also pickled to ``output`` for later reuse.
 
+    The input dataset is given one of two ways:
+
+    - ``datafile``: a single CSV already containing NAME + all feature
+      columns + TARGET.
+    - ``features`` + ``activities``: a precomputed feature matrix (as
+      returned by :func:`~mlmolprop.fingerprint.make_fingerprints` or
+      :func:`~mlmolprop.descriptors.desc`, or a CSV path to the same
+      shape) merged in memory with a small activities table for just
+      this call's target/row subset. Lets an expensive feature matrix be
+      computed once and reused across many ``data_prep()`` calls (e.g.
+      one per prediction target, or one per feature-selection config)
+      with no recomputation and no full-matrix file rewrite per call.
+      Nothing about ``features`` is chemistry-specific -- any tabular
+      feature source works the same way.
+
     Side effects: writes several diagnostic CSVs to the current working
     directory when the corresponding step runs -- ``cor_mat.csv`` (Cor),
     ``Bonferroni.csv`` (FS="clas"), ``dfout.csv``, and
@@ -73,8 +90,17 @@ def data_prep(
 
     Parameters
     ----------
-    datafile : str
-        Path to the input CSV.
+    datafile : str or None
+        Path to the input CSV. Mutually exclusive with ``features``/``activities``.
+    features : str, pandas.DataFrame, or None
+        Precomputed feature matrix, or a CSV path to one. If a
+        ``DataFrame`` lacks a ``NAME`` column, its index is used as the
+        name (matching ``make_fingerprints()``'s return shape directly).
+        Requires ``activities`` to also be given.
+    activities : pandas.DataFrame or None
+        Small table with a ``NAME`` column (and a ``TARGET`` column, when
+        labels are available -- optional for ``newset="on"`` scoring).
+        Requires ``features`` to also be given.
     Scaled, Normal, Sparse : {"on", "off"}
         Apply StandardScaler / Normalizer / MaxAbsScaler to X.
     FS : {"off", "clas", "reg"}
@@ -133,7 +159,27 @@ def data_prep(
         Otherwise: ``[X_train, y_train, X_test, y_test, v_names,
         Xnormalized, Xscaled, v_names2]``.
     """
-    df = pd.read_csv(datafile, low_memory=False)
+    if datafile is not None:
+        df = pd.read_csv(datafile, low_memory=False)
+    elif features is not None and activities is not None:
+        feat = features if isinstance(features, pd.DataFrame) else pd.read_csv(
+            features, low_memory=False
+        )
+        feat = feat.copy()
+        if NAME not in feat.columns:
+            # e.g. make_fingerprints()'s natural output: indexed by name,
+            # no NAME column yet.
+            feat = feat.reset_index()
+            feat = feat.rename(columns={feat.columns[0]: NAME})
+        feat[NAME] = feat[NAME].astype(str)
+        act = activities.copy()
+        act[NAME] = act[NAME].astype(str)
+        act_cols = [NAME] + ([TARGET] if TARGET in act.columns else [])
+        df = pd.merge(act[act_cols], feat, on=NAME, how="inner")
+    else:
+        raise ValueError(
+            "data_prep() requires either `datafile` or both `features` and `activities`"
+        )
 
     if imputation == "on":
         # NOTE: known-fragile path (was left partially broken in the original
