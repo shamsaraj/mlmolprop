@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 
@@ -31,7 +32,7 @@ def find_correlation(data: pd.DataFrame, threshold: float = 0.9) -> list[str]:
 
     data = pd.DataFrame(data)
     columns = list(data.columns)
-    corr_mat = data.corr().abs()
+    corr_arr = data.corr().abs().to_numpy()
 
     # Union-find over pairs whose correlation exceeds threshold, so columns
     # linked only transitively (A~B and B~C both exceed threshold, even if
@@ -51,10 +52,17 @@ def find_correlation(data: pd.DataFrame, threshold: float = 0.9) -> list[str]:
         if ra != rb:
             parent[ra] = rb
 
-    for i, a in enumerate(columns):
-        for b in columns[i + 1 :]:
-            if corr_mat.loc[a, b] > threshold:
-                union(a, b)
+    # Scanning every pair via DataFrame.loc in a Python loop is O(n^2) with
+    # substantial per-lookup overhead -- minutes, not seconds, past a few
+    # hundred columns (e.g. ~2 min for 2048 ECFP4 bits). np.triu_indices
+    # walks the upper triangle in the same row-major (i, then j > i) order
+    # the original nested loop used, so the union() call sequence -- and
+    # therefore which survivor each cluster keeps -- is unchanged; only the
+    # "is this pair above threshold" scan itself is vectorized.
+    iu, ju = np.triu_indices(len(columns), k=1)
+    above = corr_arr[iu, ju] > threshold
+    for i, j in zip(iu[above], ju[above], strict=True):
+        union(columns[i], columns[j])
 
     clusters: dict[str, list[str]] = {}
     for c in columns:

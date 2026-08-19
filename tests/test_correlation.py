@@ -93,6 +93,22 @@ def test_find_correlation_fully_connected_triple_keeps_exactly_one(rng):
     assert len(set(df.columns) - set(removed)) == 1
 
 
+def test_find_correlation_scales_to_thousands_of_columns(rng):
+    import time
+
+    import pandas as pd
+
+    # Regression guard: the original implementation scanned every pair via
+    # DataFrame.loc in a Python loop, ~2 minutes for 2048 columns (a typical
+    # ECFP4 fingerprint width). The vectorized implementation should handle
+    # this comfortably inside a fraction of that.
+    df = pd.DataFrame(rng.integers(0, 2, size=(300, 1500)))
+    start = time.time()
+    find_correlation(df, threshold=0.9)
+    elapsed = time.time() - start
+    assert elapsed < 30
+
+
 def test_find_correlation_known_answer_exact_duplicate(rng):
     import pandas as pd
 
