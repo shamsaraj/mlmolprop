@@ -48,6 +48,9 @@ dl = ["keras>=3.0", "torch>=2.0"]
 # no keras dependency -- unused by any code yet, kept as its own extra
 # so that path won't need to pull in keras once it exists.
 torch = ["torch>=2.0"]
+# xgboost is used only by model.py's M="xgb" path (lazy-imported there via
+# _import_xgboost(), with an informative error if missing).
+xgboost = ["xgboost>=3.0"]
 # rlPyCairo backs reportlab's raster rendering, used only by
 # image.py::svg_files_to_png() and molprep.py::RDimage() (both
 # lazy-imported, with an informative error if missing). It has no
@@ -56,7 +59,7 @@ torch = ["torch>=2.0"]
 # `pip install` can't provide. conda-forge ships a prebuilt binary
 # instead (see environment.yml), and that's the recommended path.
 image = ["rlPyCairo>=0.4.0"]
-all = ["mlmolprop[dl,torch,image]"]
+all = ["mlmolprop[dl,torch,image,xgboost]"]
 
 [project.urls]
 "Homepage" = "https://github.com/shamsaraj/mlmolprop"

@@ -43,6 +43,8 @@ REGRESSORS = [
     "ex",
     "bg",
     "gb",
+    "hgb",
+    "xgb",
     "ada",
 ]
 
@@ -67,6 +69,8 @@ CLASSIFIERS = [
     "cnb",
     "bg",
     "gb",
+    "hgb",
+    "xgb",
     "ada",
 ]
 
@@ -101,6 +105,10 @@ REGRESSOR_TEST_PARAMS = {
     "rf": {"n_estimators": 3, "max_depth": 2, "max_features": 3},
     "svm": {"C": 3},
     "tree": {"max_depth": 3, "max_features": 3},
+    # default min_samples_leaf=20 would barely allow any real split on this
+    # fixture's 22-row train set.
+    "hgb": {"max_iter": 5, "max_depth": 2, "min_samples_leaf": 2},
+    "xgb": {"n_estimators": 3, "max_depth": 2},
 }
 
 CLASSIFIER_TEST_PARAMS = {
@@ -113,6 +121,8 @@ CLASSIFIER_TEST_PARAMS = {
     "lr": {"max_iter": 3},
     "kn": {"n_neighbors": 3},
     "cnb": {"alpha": 3},
+    "hgb": {"max_iter": 5, "max_depth": 2, "min_samples_leaf": 2},
+    "xgb": {"n_estimators": 3, "max_depth": 2},
 }
 
 
@@ -449,6 +459,25 @@ def test_modelc_dl_missing_keras_raises_informative_error(monkeypatch, clas_trai
 
     with pytest.raises(ImportError, match=r"pip install 'mlmolprop\[dl\]'"):
         ModelC(X_train, y_train, X_test, y_test, v_names, M="dl", rs=0)
+
+
+def test_model_xgb_missing_xgboost_raises_informative_error(monkeypatch, reg_train_test):
+    # xgboost lives behind the optional "xgboost" extra; if it's not
+    # installed, M="xgb" should fail with a clear message pointing at how
+    # to get it, not a bare ImportError from deep inside Model().
+    X_train, y_train, X_test, y_test, v_names = reg_train_test
+    monkeypatch.setitem(sys.modules, "xgboost", None)
+
+    with pytest.raises(ImportError, match=r"pip install 'mlmolprop\[xgboost\]'"):
+        Model(X_train, y_train, X_test, y_test, v_names, M="xgb", rs=0)
+
+
+def test_modelc_xgb_missing_xgboost_raises_informative_error(monkeypatch, clas_train_test):
+    X_train, y_train, X_test, y_test, v_names = clas_train_test
+    monkeypatch.setitem(sys.modules, "xgboost", None)
+
+    with pytest.raises(ImportError, match=r"pip install 'mlmolprop\[xgboost\]'"):
+        ModelC(X_train, y_train, X_test, y_test, v_names, M="xgb", rs=0)
 
 
 def test_clus_uns_pca_then_kmeans_then_pc_km_in_one_process(reg_train_test):

@@ -25,6 +25,8 @@ from sklearn.ensemble import (
     ExtraTreesRegressor,
     GradientBoostingClassifier,
     GradientBoostingRegressor,
+    HistGradientBoostingClassifier,
+    HistGradientBoostingRegressor,
     RandomForestClassifier,
     RandomForestRegressor,
 )
@@ -372,7 +374,8 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
     M : str, default "mlr"
         Which regressor to fit. One of: pls, mlr, rf, svm, lsvm, lasso,
         nn, tree, rg, el, la, ll, or, brg, ardr, ransa, the, hub, sgdr,
-        kn, gu, ex, bg, gb, ada.
+        kn, gu, ex, bg, gb, hgb, xgb, ada. M="xgb" requires the optional
+        "xgboost" extra (see :func:`_import_xgboost`).
     rs : int or None
         Random state, where the estimator supports one.
     cv : {"loo", "kf", "kfr", "off"}, default "loo"
@@ -477,6 +480,13 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
     elif M == "gb":
         model = GradientBoostingRegressor(random_state=rs, **p)
         model2 = GradientBoostingRegressor(random_state=rs, **p)
+    elif M == "hgb":
+        model = HistGradientBoostingRegressor(random_state=rs, **p)
+        model2 = HistGradientBoostingRegressor(random_state=rs, **p)
+    elif M == "xgb":
+        xgboost = _import_xgboost()
+        model = xgboost.XGBRegressor(random_state=rs, **p)
+        model2 = xgboost.XGBRegressor(random_state=rs, **p)
     elif M == "ada":
         model = AdaBoostRegressor(random_state=rs, **p)
         model2 = AdaBoostRegressor(random_state=rs, **p)
@@ -542,7 +552,7 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
                 # Treat it as directional (which features rank higher),
                 # not as a precise coefficient.
                 VI = np.linalg.multi_dot(model.coefs_)
-            elif M in ("rf", "tree", "ex", "gb", "ada"):
+            elif M in ("rf", "tree", "ex", "gb", "xgb", "ada"):
                 VI = model.feature_importances_
             elif M == "pls":
                 # PLSRegression.coef_ is (n_targets, n_features), the
@@ -591,6 +601,23 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
             y, y_predict_train, ytest, y_predict_test, ytests, ypreds, k=len(v_names)
         )
     return [result, List, model, analysis]
+
+
+def _import_xgboost():
+    """Import xgboost, raising an informative error if the optional extra is missing.
+
+    Same pattern as :func:`_build_dl_model` below (lazy import, actionable
+    ImportError) -- M="xgb" isn't a hard dependency, so a bare ImportError
+    from deep inside xgboost's own import machinery would be confusing.
+    """
+    try:
+        import xgboost
+    except ImportError as e:
+        raise ImportError(
+            "M='xgb' requires the optional 'xgboost' extra. Install with: "
+            "pip install 'mlmolprop[xgboost]'"
+        ) from e
+    return xgboost
 
 
 # Torch models belong behind this same M= interface (e.g. M="dl_torch"),
@@ -657,8 +684,10 @@ def ModelC(
     M : str, default "tree"
         Which classifier to fit. One of: tree, nn, rf, ex, lsvm, svm,
         lr, ld, rg, per, pass, qua, sgdc, kn, rn, gu, gunb, cnb, bg, gb,
-        ada, dl (a small Keras MLP). (Lasso/KernelRidge are regression-only
-        models and aren't offered here -- see Model() for those.)
+        hgb, xgb, ada, dl (a small Keras MLP). (Lasso/KernelRidge are
+        regression-only models and aren't offered here -- see Model() for
+        those.) M="xgb" requires the optional "xgboost" extra (see
+        :func:`_import_xgboost`); M="dl" requires the optional "dl" extra.
     cv : {"loo", "kf", "kfr", "shuff"}
         Cross-validation strategy for the CV-based accuracy report.
     params : dict or None
@@ -778,6 +807,14 @@ def ModelC(
     elif M == "gb":
         model = GradientBoostingClassifier(random_state=rs, **p)
         model2 = GradientBoostingClassifier(random_state=rs, **p)
+    elif M == "hgb":
+        mp = {"class_weight": "balanced", **p}
+        model = HistGradientBoostingClassifier(random_state=rs, **mp)
+        model2 = HistGradientBoostingClassifier(random_state=rs, **mp)
+    elif M == "xgb":
+        xgboost = _import_xgboost()
+        model = xgboost.XGBClassifier(random_state=rs, **p)
+        model2 = xgboost.XGBClassifier(random_state=rs, **p)
     elif M == "ada":
         model = AdaBoostClassifier(random_state=rs, **p)
         model2 = AdaBoostClassifier(random_state=rs, **p)
@@ -938,7 +975,7 @@ def ModelC(
             # Optional visualization; many possible failure modes
             # (missing graphviz package, missing system binary, ...).
             print(f"could not render decision tree diagram: {exc}")
-    elif M in ("rf", "ex", "gb", "ada"):
+    elif M in ("rf", "ex", "gb", "xgb", "ada"):
         VI = model.feature_importances_
     elif M == "svm":
         if svm_kernel == "linear":
@@ -949,7 +986,16 @@ def ModelC(
         # "Connection weights" importance -- see the fuller note in Model()
         # above. Rough linear surrogate (ignores ReLU), directional only.
         VI = np.linalg.multi_dot(model.coefs_)
-    elif M in ("qua", "kn", "gu", "bg", "rn") or M == "gunb" or M == "cnb" or M == "dl":
+    elif (
+        M in ("qua", "kn", "gu", "bg", "rn", "hgb")
+        or M == "gunb"
+        or M == "cnb"
+        or M == "dl"
+    ):
+        # HistGradientBoosting* (unlike RandomForest/GradientBoosting/
+        # ExtraTrees) exposes neither feature_importances_ nor coef_ --
+        # sklearn's own recommendation is permutation_importance instead,
+        # which needs a scorer/held-out data, not just the fitted model.
         VI = ""
     elif M == "rg":
         # Unlike the other linear classifiers here, RidgeClassifier's
@@ -961,7 +1007,7 @@ def ModelC(
         VI = model.coef_[0]
 
     if (
-        M in ("qua", "kn", "gu", "bg", "rn", "dl")
+        M in ("qua", "kn", "gu", "bg", "rn", "hgb", "dl")
         or M == "gunb"
         or M == "cnb"
         or M == "svm"
@@ -980,6 +1026,8 @@ def ModelC(
         "rf",
         "ex",
         "gb",
+        "hgb",
+        "xgb",
         "ada",
         "svm",
         "qua",
