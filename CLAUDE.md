@@ -13,6 +13,10 @@ mlmolprop-interpretation, or mlmolprop-pytorch here.
 - Never commit data files; examples/data holds only public benchmarks.
 - Before any commit, run: pip install -e ".[dev]" && pytest && ruff check .
 - Tests: prefer property-based assertions over hardcoded expected values.
+- Always ask before cutting a new release (i.e. before starting the Release
+  checklist below). Plain commits/pushes of working-tree changes don't need
+  to ask, but a version bump + tag does -- not every change is meant to ship
+  immediately (e.g. a library addition not yet wired into any pipeline).
 
 ## Release checklist
 1. Tests and ruff pass.
