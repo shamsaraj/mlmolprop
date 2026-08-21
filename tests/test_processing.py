@@ -593,3 +593,93 @@ def test_average_bygroup(cwd_tmp_path):
     avr = average_bygroup(df, "g", "avr.csv")
     assert avr.loc["v", 1] == 15.0
     assert avr.loc["v", 2] == 30.0
+
+
+@pytest.fixture
+def fs_dataset_csv(rng, cwd_tmp_path):
+    """Two informative features (f1, f2) plus two pure-noise features, with both a
+    continuous and a binary target derived from the same informative signal -- lets
+    RFE/Elastic-Net selection tests assert the informative features actually survive
+    selection over the noise ones, not just that selection runs without error.
+    """
+    n = 100
+    f1 = rng.normal(size=n)
+    f2 = rng.normal(size=n)
+    noise1 = rng.normal(size=n)
+    noise2 = rng.normal(size=n)
+    y_reg = 3 * f1 + 2 * f2 + rng.normal(scale=0.1, size=n)
+    y_clas = (y_reg > np.median(y_reg)).astype(int)
+    df = pd.DataFrame(
+        {
+            "name": [f"m{i}" for i in range(n)],
+            "f1": f1,
+            "f2": f2,
+            "noise1": noise1,
+            "noise2": noise2,
+            "y_reg": y_reg,
+            "y_clas": y_clas,
+        }
+    )
+    df.to_csv("fs_data.csv", index=False)
+    return "fs_data.csv"
+
+
+def test_data_prep_fs_rfe_reg_selects_informative_features(fs_dataset_csv):
+    result = data_prep(
+        fs_dataset_csv, TARGET="y_reg", REMOVE=["y_clas"], FS="rfe_reg", ndes=2,
+        mod="reg", ratio=0.25, rs=0,
+    )
+    v_names = result[4]
+    assert len(v_names) == 2
+    assert set(v_names) == {"f1", "f2"}
+
+
+def test_data_prep_fs_rfe_clas_selects_informative_features(fs_dataset_csv):
+    result = data_prep(
+        fs_dataset_csv, TARGET="y_clas", REMOVE=["y_reg"], FS="rfe_clas", ndes=2,
+        mod="class", ratio=0.25, rs=0,
+    )
+    v_names = result[4]
+    assert len(v_names) == 2
+    assert set(v_names) == {"f1", "f2"}
+
+
+def test_data_prep_fs_enet_reg_with_fixed_k(fs_dataset_csv):
+    result = data_prep(
+        fs_dataset_csv, TARGET="y_reg", REMOVE=["y_clas"], FS="enet_reg", ndes=2,
+        mod="reg", ratio=0.25, rs=0,
+    )
+    v_names = result[4]
+    assert len(v_names) == 2
+
+
+def test_data_prep_fs_enet_reg_without_fixed_k(fs_dataset_csv):
+    # ndes=None: no top-k cap -- however many features the L1 penalty leaves
+    # non-zero is however many get kept, not necessarily any particular count.
+    result = data_prep(
+        fs_dataset_csv, TARGET="y_reg", REMOVE=["y_clas"], FS="enet_reg", ndes=None,
+        mod="reg", ratio=0.25, rs=0,
+    )
+    v_names = result[4]
+    assert 0 < len(v_names) <= 4
+
+
+def test_data_prep_fs_enet_clas_selects_features(fs_dataset_csv):
+    result = data_prep(
+        fs_dataset_csv, TARGET="y_clas", REMOVE=["y_reg"], FS="enet_clas", ndes=2,
+        mod="class", ratio=0.25, rs=0,
+    )
+    v_names = result[4]
+    assert len(v_names) == 2
+
+
+def test_data_prep_unknown_fs_raises(dataset_csv):
+    with pytest.raises(ValueError):
+        data_prep(dataset_csv, FS="bogus", mod="reg", ratio=0.25, rs=0)
+
+
+def test_data_prep_ratio_zero_uses_all_data_for_train_and_test(dataset_csv):
+    result = data_prep(dataset_csv, mod="reg", ratio=0, rs=0)
+    X_train, y_train, X_test, y_test = result[0], result[1], result[2], result[3]
+    assert len(X_train) == len(X_test) == 60
+    assert len(y_train) == len(y_test) == 60

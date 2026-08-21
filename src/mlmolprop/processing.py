@@ -8,11 +8,14 @@ import numpy as np
 import pandas as pd
 from sklearn import preprocessing
 from sklearn.feature_selection import (
+    RFE,
+    SelectFromModel,
     SelectKBest,
     VarianceThreshold,
     f_classif,
     f_regression,
 )
+from sklearn.linear_model import ElasticNet, LinearRegression, LogisticRegression
 from sklearn.model_selection import train_test_split
 
 from .correlation import find_correlation
@@ -103,9 +106,21 @@ def data_prep(
         Requires ``features`` to also be given.
     Scaled, Normal, Sparse : {"on", "off"}
         Apply StandardScaler / Normalizer / MaxAbsScaler to X.
-    FS : {"off", "clas", "reg"}
-        Univariate feature selection (SelectKBest) for classification or
-        regression, keeping the top ``ndes`` features.
+    FS : {"off", "clas", "reg", "rfe_clas", "rfe_reg", "enet_clas", "enet_reg"}
+        Feature selection method, keeping (up to) ``ndes`` features:
+
+        - ``"clas"``/``"reg"``: univariate ``SelectKBest`` (F-test) for
+          classification/regression.
+        - ``"rfe_clas"``/``"rfe_reg"``: recursive feature elimination
+          (``RFE``) using a ``LogisticRegression``/``LinearRegression``
+          base estimator, eliminating 10% of remaining features per step
+          (not the default one-at-a-time) to keep repeated refitting cheap
+          on wide feature sets.
+        - ``"enet_clas"``/``"enet_reg"``: embedded selection via
+          ``SelectFromModel`` wrapping an Elastic-Net-penalized
+          ``LogisticRegression``/``ElasticNet``. Pass ``ndes=None`` to
+          skip the top-k cap entirely and keep whatever the L1 penalty
+          alone doesn't zero out.
     cat_columns : list[str] or None
         Column names to one-hot encode (via ``pandas.get_dummies``)
         before variance filtering. Encoding a new external set
@@ -115,8 +130,10 @@ def data_prep(
         misaligning.
     Cor : {"on", "off"}
         Drop one of each pair of features whose correlation exceeds 0.9.
-    ndes : int, default 6
-        Number of features kept by ``FS``.
+    ndes : int or None, default 6
+        Number of features kept by ``FS``. ``None`` is only meaningful for
+        ``FS="enet_clas"``/``"enet_reg"``, where it means "no fixed count"
+        (see ``FS`` above).
     rs : int or None
         Random state for the train/test split.
     newset : {"on", "off"}
@@ -145,7 +162,12 @@ def data_prep(
     rowremoval
         If given, rows where ``df[TARGET] == rowremoval`` are dropped.
     ratio : float, default 0.2
-        Test-set fraction for the train/test split.
+        Test-set fraction for the train/test split. ``ratio=0`` skips the
+        split entirely: ``X_train``/``X_test`` (and ``y_train``/``y_test``)
+        are both the full dataset, so every downstream step (variance
+        filtering, scaling, correlation filtering, feature selection) fits
+        on -- and every reported "test" metric evaluates against -- all
+        available data, with no held-out set.
     selection : list[str] or None
         If given, restrict to just these feature columns (plus TARGET).
     mod : {"class", "reg"}
@@ -251,7 +273,11 @@ def data_prep(
     y = y.set_index(index_names)
 
     y_split = np.ravel(y)
-    if mod == "class":
+    if ratio == 0:
+        # No held-out set -- every downstream step below fits on (and every
+        # reported "test" metric evaluates against) the entire dataset.
+        X_train, X_test, y_train, y_test = X, X, y_split, y_split
+    elif mod == "class":
         X_train, X_test, y_train, y_test = train_test_split(
             X, y_split, test_size=ratio, random_state=rs, stratify=y_split
         )
@@ -311,7 +337,7 @@ def data_prep(
         X_test = X_test.drop(col_name, axis=1)
         v_names = list(X_train.columns.values)
 
-    if FS in ("clas", "reg"):
+    if FS != "off":
         if FS == "clas":
             selector = SelectKBest(f_classif, k=ndes).fit(X_train, y_train)
             p_values = selector.pvalues_
@@ -322,10 +348,35 @@ def data_prep(
             bonferroni = p_values * X_train.shape[1]
             bonferroni_df = pd.DataFrame(bonferroni, index=v_names, columns=["p value"])
             bonferroni_df.to_csv("Bonferroni.csv")
-        else:
+        elif FS == "reg":
             selector = SelectKBest(score_func=f_regression, k=ndes).fit(
                 X_train, y_train
             )
+        elif FS == "rfe_clas":
+            # step=0.1 (drop 10% of remaining features per iteration) instead of
+            # RFE's default step=1 -- one-at-a-time elimination means up to
+            # ~n_features refits to reach a small ndes, prohibitively slow on
+            # wide feature sets (ECFP4 fingerprints are ~2048 columns).
+            selector = RFE(
+                LogisticRegression(max_iter=1000), n_features_to_select=ndes, step=0.1
+            ).fit(X_train, y_train)
+        elif FS == "rfe_reg":
+            selector = RFE(
+                LinearRegression(), n_features_to_select=ndes, step=0.1
+            ).fit(X_train, y_train)
+        elif FS == "enet_clas":
+            # max_features=None (ndes left unset) keeps every feature the L1
+            # penalty doesn't zero out, instead of forcing an exact count.
+            selector = SelectFromModel(
+                LogisticRegression(solver="saga", l1_ratio=0.5, max_iter=5000),
+                max_features=ndes,
+            ).fit(X_train, y_train)
+        elif FS == "enet_reg":
+            selector = SelectFromModel(
+                ElasticNet(l1_ratio=0.5), max_features=ndes
+            ).fit(X_train, y_train)
+        else:
+            raise ValueError(f"Unknown FS: {FS!r}")
         mask = selector.get_support()
         v_names = X_train.columns[mask]
         X_train = pd.DataFrame(
