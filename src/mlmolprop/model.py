@@ -67,6 +67,7 @@ from sklearn.neighbors import (
 from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.svm import SVC, SVR, LinearSVC, LinearSVR
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+from sklearn.utils.class_weight import compute_sample_weight
 
 from .basic import RMSEP_CV_C, F, analyse, q2r2, r2test
 
@@ -826,7 +827,11 @@ def ModelC(
         ``{"max_depth": 8, "n_estimators": 200}`` for M="rf", or
         ``{"C": 5, "kernel": "linear"}`` for M="svm". ``class_weight``
         is a recognized key for every model that supports it (rf,
-        lsvm, svm, lr). For M="dl" (the Keras MLP, which has no
+        lsvm, svm, lr, hgb natively; gb and xgb emulate it via a
+        per-fit ``sample_weight`` computed from whatever ``y`` is
+        actually passed to ``.fit()``, since their underlying
+        estimators have no ``class_weight`` constructor argument).
+        For M="dl" (the Keras MLP, which has no
         scikit-learn constructor), the recognized keys are instead
         ``epochs``, ``hidden_layer_sizes``, ``learning_rate``,
         ``nesterov``, ``optimizer`` ("adam"/"sgd"), ``dropout``, ``l2``
@@ -844,6 +849,12 @@ def ModelC(
     y_array = np.array(y)
     p = dict(params or {})
     svm_kernel = p.get("kernel", "rbf")
+    # Set only for models whose underlying estimator has no native
+    # class_weight constructor argument (gb, xgb) -- "balanced" here means
+    # a per-fit sample_weight (computed from whatever y that fit actually
+    # sees) is used to emulate it, same intent as the other models' native
+    # class_weight="balanced" default.
+    sample_weight_mode = None
 
     if M == "tree":
         mp = {"max_depth": 10, "max_features": 10, **p}
@@ -934,16 +945,20 @@ def ModelC(
         model = BaggingClassifier(random_state=rs, **p)
         model2 = BaggingClassifier(random_state=rs, **p)
     elif M == "gb":
-        model = GradientBoostingClassifier(random_state=rs, **p)
-        model2 = GradientBoostingClassifier(random_state=rs, **p)
+        mp = {"class_weight": "balanced", **p}
+        sample_weight_mode = mp.pop("class_weight")
+        model = GradientBoostingClassifier(random_state=rs, **mp)
+        model2 = GradientBoostingClassifier(random_state=rs, **mp)
     elif M == "hgb":
         mp = {"class_weight": "balanced", **p}
         model = HistGradientBoostingClassifier(random_state=rs, **mp)
         model2 = HistGradientBoostingClassifier(random_state=rs, **mp)
     elif M == "xgb":
         xgboost = _import_xgboost()
-        model = xgboost.XGBClassifier(random_state=rs, **p)
-        model2 = xgboost.XGBClassifier(random_state=rs, **p)
+        mp = {"class_weight": "balanced", **p}
+        sample_weight_mode = mp.pop("class_weight")
+        model = xgboost.XGBClassifier(random_state=rs, **mp)
+        model2 = xgboost.XGBClassifier(random_state=rs, **mp)
     elif M == "ada":
         model = AdaBoostClassifier(random_state=rs, **p)
         model2 = AdaBoostClassifier(random_state=rs, **p)
@@ -1031,7 +1046,10 @@ def ModelC(
         y_predict_train = (model.predict(x, verbose=0) > 0.5).astype("int32").ravel()
         y_predict_test = (model.predict(xtest, verbose=0) > 0.5).astype("int32").ravel()
     else:
-        model.fit(x, y)
+        if sample_weight_mode == "balanced":
+            model.fit(x, y, sample_weight=compute_sample_weight("balanced", y_array))
+        else:
+            model.fit(x, y)
         y_predict_train = model.predict(x)
         y_predict_test = model.predict(xtest)
 
@@ -1054,7 +1072,10 @@ def ModelC(
         for train_idx, test_idx in loo.split(x):
             X_train, X_test = X_array[train_idx], X_array[test_idx]
             y_train, y_test = y_array[train_idx], y_array[test_idx]
-            model2.fit(X_train, y_train)
+            if sample_weight_mode == "balanced":
+                model2.fit(X_train, y_train, sample_weight=compute_sample_weight("balanced", y_train))
+            else:
+                model2.fit(X_train, y_train)
             y_pred = model2.predict(X_test)
 
             if n == 0:

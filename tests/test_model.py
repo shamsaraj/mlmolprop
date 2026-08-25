@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import mlmolprop.model as model_module
 from mlmolprop.model import (
     Model,
     ModelC,
@@ -283,6 +284,42 @@ def test_modelc_every_classifier_type(clas_train_test, M):
     )
     assert 0.0 <= result["accuracy_score_train"] <= 1.0
     assert 0.0 <= result["accuracy_score_test"] <= 1.0
+
+
+@pytest.mark.parametrize("M", ["gb", "xgb"])
+def test_modelc_gb_xgb_default_to_balanced_sample_weight(clas_train_test, monkeypatch, M):
+    # Unlike rf/svm/lr/hgb, GradientBoostingClassifier/XGBClassifier have no
+    # class_weight constructor argument -- ModelC() should emulate a
+    # "balanced" default by computing a per-fit sample_weight instead
+    # (same intent, different mechanism).
+    X_train, y_train, X_test, y_test, v_names = clas_train_test
+    real_compute = model_module.compute_sample_weight
+    calls = []
+
+    def spy(*args, **kwargs):
+        calls.append(args)
+        return real_compute(*args, **kwargs)
+
+    monkeypatch.setattr(model_module, "compute_sample_weight", spy)
+    ModelC(
+        X_train, y_train, X_test, y_test, v_names,
+        params=CLASSIFIER_TEST_PARAMS.get(M, {}), M=M, rs=0, cv="loo",
+    )
+    assert calls, f"expected compute_sample_weight('balanced', ...) to be used by default for M={M!r}"
+    assert all(args[0] == "balanced" for args in calls)
+
+
+@pytest.mark.parametrize("M", ["gb", "xgb"])
+def test_modelc_gb_xgb_class_weight_none_disables_sample_weight(clas_train_test, monkeypatch, M):
+    X_train, y_train, X_test, y_test, v_names = clas_train_test
+    calls = []
+    monkeypatch.setattr(model_module, "compute_sample_weight", lambda *a, **k: calls.append(a))
+    ModelC(
+        X_train, y_train, X_test, y_test, v_names,
+        params={**CLASSIFIER_TEST_PARAMS.get(M, {}), "class_weight": None},
+        M=M, rs=0, cv="loo",
+    )
+    assert not calls, f"class_weight=None should skip sample_weight entirely for M={M!r}"
 
 
 def test_model_cv_off_does_not_crash_and_matches_cv_on(reg_train_test):
