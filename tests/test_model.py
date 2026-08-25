@@ -461,6 +461,64 @@ def test_modelc_dl_missing_keras_raises_informative_error(monkeypatch, clas_trai
         ModelC(X_train, y_train, X_test, y_test, v_names, M="dl", rs=0)
 
 
+@pytest.mark.slow
+def test_model_dl_actually_trains(reg_train_test):
+    # Same regression guard as test_modelc_dl_actually_trains: compare
+    # against a same-seed fresh (untrained) model rather than an error
+    # threshold, since a tiny stochastic net's accuracy is noisy run to run
+    # in a way its weights (fully determined by the seed before any
+    # training) aren't.
+    keras = pytest.importorskip("keras")
+
+    from mlmolprop.model import _build_dl_model
+
+    X_train, y_train, X_test, y_test, v_names = reg_train_test
+
+    keras.utils.set_random_seed(0)
+    fresh_model = _build_dl_model(
+        len(v_names),
+        hidden_layer_sizes=[8, 4],
+        dropout=0.2,
+        optimizer="adam",
+        learning_rate=0.01,
+        nesterov=True,
+        task="regression",
+    )
+    fresh_weights = fresh_model.get_weights()[0].copy()
+
+    keras.utils.set_random_seed(0)
+    result, cv_metrics, fitted_model, analysis = Model(
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        v_names,
+        M="dl",
+        rs=0,
+        cv="kf",
+        params={"epochs": 20, "hidden_layer_sizes": [8, 4], "batch_size": 8},
+    )
+    trained_weights = fitted_model.get_weights()[0]
+
+    assert not np.allclose(fresh_weights, trained_weights)
+    assert "R2" in result
+    # M="dl" always runs its own internal 5-fold CV regardless of `cv`, but
+    # only populates List/analysis when cv != "off".
+    assert cv_metrics is not None
+    assert analysis is not None
+
+
+def test_model_dl_missing_keras_raises_informative_error(monkeypatch, reg_train_test):
+    # keras/torch live behind the optional "dl" extra; if they're not
+    # installed, M="dl" should fail with a clear message pointing at how to
+    # get them, not a bare ImportError from deep inside _build_dl_model.
+    X_train, y_train, X_test, y_test, v_names = reg_train_test
+    monkeypatch.setitem(sys.modules, "keras", None)
+
+    with pytest.raises(ImportError, match=r"pip install 'mlmolprop\[dl\]'"):
+        Model(X_train, y_train, X_test, y_test, v_names, M="dl", rs=0)
+
+
 def test_model_xgb_missing_xgboost_raises_informative_error(monkeypatch, reg_train_test):
     # xgboost lives behind the optional "xgboost" extra; if it's not
     # installed, M="xgb" should fail with a clear message pointing at how

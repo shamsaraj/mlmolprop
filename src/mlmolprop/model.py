@@ -51,7 +51,7 @@ from sklearn.linear_model import (
     SGDRegressor,
     TheilSenRegressor,
 )
-from sklearn.metrics import accuracy_score, confusion_matrix, mean_squared_error
+from sklearn.metrics import accuracy_score, confusion_matrix, mean_squared_error, r2_score
 from sklearn.model_selection import (
     KFold,
     LeaveOneOut,
@@ -374,13 +374,24 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
     M : str, default "mlr"
         Which regressor to fit. One of: pls, mlr, rf, svm, lsvm, lasso,
         nn, tree, rg, el, la, ll, or, brg, ardr, ransa, the, hub, sgdr,
-        kn, gu, ex, bg, gb, hgb, xgb, ada. M="xgb" requires the optional
-        "xgboost" extra (see :func:`_import_xgboost`).
+        kn, gu, ex, bg, gb, hgb, xgb, ada, dl (a small Keras MLP,
+        linear output/MSE loss). M="xgb" requires the optional
+        "xgboost" extra (see :func:`_import_xgboost`); M="dl" requires
+        the optional "dl" extra. For M="dl" (which has no scikit-learn
+        constructor), the recognized ``params`` keys are instead
+        ``epochs``, ``hidden_layer_sizes``, ``learning_rate``,
+        ``nesterov``, ``optimizer`` ("adam"/"sgd"), ``dropout``, and
+        ``batch_size`` -- same keys as ``ModelC()``'s M="dl". Unlike
+        every other M here, M="dl" always internally runs its own
+        5-fold CV to fit ``model``/populate ``List`` regardless of
+        ``cv`` (only whether ``List`` is actually returned depends on
+        ``cv != "off"``) -- matches ``ModelC()``'s M="dl" behavior.
     rs : int or None
         Random state, where the estimator supports one.
     cv : {"loo", "kf", "kfr", "off"}, default "loo"
         Cross-validation strategy for the reported CV metrics ("off"
         skips cross-validation; ``List``/``analysis`` are then ``None``).
+        Ignored for M="dl", which always uses its own internal 5-fold CV.
 
     Returns
     -------
@@ -490,13 +501,85 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
     elif M == "ada":
         model = AdaBoostRegressor(random_state=rs, **p)
         model2 = AdaBoostRegressor(random_state=rs, **p)
+    elif M == "dl":
+        dl_params = {
+            "epochs": 300,
+            "hidden_layer_sizes": (500, 1000),
+            "learning_rate": 0.01,
+            "nesterov": True,
+            "optimizer": "adam",
+            "dropout": 0.2,
+            "batch_size": 16,
+            **p,
+        }
+        model = _build_dl_model(
+            len(v_names),
+            dl_params["hidden_layer_sizes"],
+            dl_params["dropout"],
+            dl_params["optimizer"],
+            dl_params["learning_rate"],
+            dl_params["nesterov"],
+            task="regression",
+        )
     else:
         raise ValueError(f"unknown model name M={M!r}")
 
-    model.fit(x, y)
-    y_predict_train = model.predict(x)
-    y_predict_test = model.predict(xtest)
-    r2 = model.score(x, y)
+    if M == "dl":
+        from keras.callbacks import EarlyStopping
+
+        # Unlike the generic `cv != "off"` block below, this internal 5-fold CV
+        # always runs, regardless of `cv` -- same (already-shipped) behavior as
+        # ModelC()'s M="dl" path: whether the resulting CV metric is actually
+        # returned is gated by `cv` later, but the extra fits are always paid for.
+        loo = KFold(n_splits=5, shuffle=True, random_state=rs)
+        for train_idx, test_idx in loo.split(x):
+            X_train, X_test = X_array[train_idx], X_array[test_idx]
+            y_train, y_test = y_array[train_idx], y_array[test_idx]
+
+            model2 = _build_dl_model(
+                len(v_names),
+                dl_params["hidden_layer_sizes"],
+                dl_params["dropout"],
+                dl_params["optimizer"],
+                dl_params["learning_rate"],
+                dl_params["nesterov"],
+                task="regression",
+            )
+            early_stopping = EarlyStopping(
+                monitor="val_loss", patience=5, restore_best_weights=True
+            )
+            model2.fit(
+                X_train,
+                y_train,
+                batch_size=dl_params["batch_size"],
+                epochs=dl_params["epochs"],
+                validation_data=(X_test, y_test),
+                callbacks=[early_stopping],
+                verbose=0,
+            )
+            y_pred = model2.predict(X_test, verbose=0).ravel()
+            ytests += list(y_test)
+            ypreds += list(y_pred)
+
+        early_stopping = EarlyStopping(
+            monitor="loss", patience=5, restore_best_weights=True
+        )
+        model.fit(
+            x,
+            y,
+            batch_size=dl_params["batch_size"],
+            epochs=dl_params["epochs"],
+            callbacks=[early_stopping],
+            verbose=0,
+        )
+        y_predict_train = model.predict(x, verbose=0).ravel()
+        y_predict_test = model.predict(xtest, verbose=0).ravel()
+        r2 = r2_score(y, y_predict_train)
+    else:
+        model.fit(x, y)
+        y_predict_train = model.predict(x)
+        y_predict_test = model.predict(xtest)
+        r2 = model.score(x, y)
     R2test = r2test(ytest, y_predict_test, y)
     Pearson = stats.pearsonr(ytest, y_predict_test)
     q2f2 = r2test(ytest, y_predict_test, ytest)
@@ -513,7 +596,7 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
         f = float("nan")
 
     List = None
-    if cv != "off":
+    if M != "dl" and cv != "off":
         if cv == "loo":
             loo = LeaveOneOut()
         elif cv == "kf":
@@ -533,8 +616,15 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
         q2 = q2r2(ytests, ypreds)
         rmse = RMSEP_CV_C(ytests, ypreds)
         List = {"q2": q2, "RMSECV": rmse, "Q2F2": q2f2}
+    elif M == "dl" and cv != "off":
+        # ytests/ypreds were already populated by M="dl"'s own internal 5-fold
+        # CV above (unconditional, unlike the generic loop) -- just turn them
+        # into the same List shape the generic path returns.
+        q2 = q2r2(ytests, ypreds)
+        rmse = RMSEP_CV_C(ytests, ypreds)
+        List = {"q2": q2, "RMSECV": rmse, "Q2F2": q2f2}
 
-    if M == "svm":
+    if M in ("svm", "dl"):
         sorted_VI = ""
     else:
         try:
@@ -628,7 +718,13 @@ def _import_xgboost():
 # below: import torch lazily inside the builder, and raise an ImportError
 # pointing at `pip install mlmolprop[torch]` if it's missing.
 def _build_dl_model(
-    n_features, hidden_layer_sizes, dropout, optimizer, learning_rate, nesterov
+    n_features,
+    hidden_layer_sizes,
+    dropout,
+    optimizer,
+    learning_rate,
+    nesterov,
+    task="classification",
 ):
     try:
         from keras import Sequential, optimizers
@@ -646,7 +742,12 @@ def _build_dl_model(
     for units in hidden_layer_sizes:
         model.add(Dense(units, kernel_initializer="uniform", activation="relu"))
         model.add(Dropout(dropout))
-    model.add(Dense(1, kernel_initializer="normal", activation="sigmoid"))
+    if task == "regression":
+        model.add(Dense(1, kernel_initializer="normal", activation="linear"))
+        loss, metrics = "mse", ["mae"]
+    else:
+        model.add(Dense(1, kernel_initializer="normal", activation="sigmoid"))
+        loss, metrics = "binary_crossentropy", ["accuracy"]
 
     if optimizer == "sgd":
         opt = optimizers.SGD(
@@ -654,7 +755,7 @@ def _build_dl_model(
         )
     else:
         opt = optimizers.Adam(learning_rate=learning_rate)
-    model.compile(loss="binary_crossentropy", optimizer=opt, metrics=["accuracy"])
+    model.compile(loss=loss, optimizer=opt, metrics=metrics)
     return model
 
 
