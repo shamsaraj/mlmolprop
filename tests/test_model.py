@@ -404,6 +404,24 @@ def test_modelc_invalid_name_raises_value_error(clas_train_test):
         ModelC(X_train, y_train, X_test, y_test, v_names, M="bogus")
 
 
+def test_build_dl_model_l2_sets_kernel_regularizer():
+    pytest.importorskip("keras")
+    from mlmolprop.model import _build_dl_model
+
+    no_l2 = _build_dl_model(
+        4, hidden_layer_sizes=[8], dropout=0.2, optimizer="adam",
+        learning_rate=0.01, nesterov=True, l2=0.0,
+    )
+    with_l2 = _build_dl_model(
+        4, hidden_layer_sizes=[8], dropout=0.2, optimizer="adam",
+        learning_rate=0.01, nesterov=True, l2=0.01,
+    )
+    # First Dense layer in each model (Input isn't itself an entry in .layers).
+    assert no_l2.layers[0].kernel_regularizer is None
+    assert with_l2.layers[0].kernel_regularizer is not None
+    assert with_l2.layers[0].kernel_regularizer.l2 == pytest.approx(0.01)
+
+
 @pytest.mark.slow
 def test_modelc_dl_actually_trains(clas_train_test):
     # regression guard: the early-stopping callback was never attached to

@@ -380,7 +380,8 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
         the optional "dl" extra. For M="dl" (which has no scikit-learn
         constructor), the recognized ``params`` keys are instead
         ``epochs``, ``hidden_layer_sizes``, ``learning_rate``,
-        ``nesterov``, ``optimizer`` ("adam"/"sgd"), ``dropout``, and
+        ``nesterov``, ``optimizer`` ("adam"/"sgd"), ``dropout``, ``l2``
+        (L2 weight-regularization strength, default 0.0 -- no penalty), and
         ``batch_size`` -- same keys as ``ModelC()``'s M="dl". Unlike
         every other M here, M="dl" always internally runs its own
         5-fold CV to fit ``model``/populate ``List`` regardless of
@@ -510,6 +511,7 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
             "optimizer": "adam",
             "dropout": 0.2,
             "batch_size": 16,
+            "l2": 0.0,
             **p,
         }
         model = _build_dl_model(
@@ -520,6 +522,7 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
             dl_params["learning_rate"],
             dl_params["nesterov"],
             task="regression",
+            l2=dl_params["l2"],
         )
     else:
         raise ValueError(f"unknown model name M={M!r}")
@@ -544,6 +547,7 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
                 dl_params["learning_rate"],
                 dl_params["nesterov"],
                 task="regression",
+                l2=dl_params["l2"],
             )
             early_stopping = EarlyStopping(
                 monitor="val_loss", patience=5, restore_best_weights=True
@@ -725,9 +729,10 @@ def _build_dl_model(
     learning_rate,
     nesterov,
     task="classification",
+    l2=0.0,
 ):
     try:
-        from keras import Sequential, optimizers
+        from keras import Sequential, optimizers, regularizers
         from keras.layers import Dense, Dropout, Input
     except ImportError as e:
         raise ImportError(
@@ -737,10 +742,19 @@ def _build_dl_model(
             "KERAS_BACKEND=torch before running."
         ) from e
 
+    # l2=0.0 (the default) passes kernel_regularizer=None -- keras.regularizers.l2(0.0)
+    # would technically also work out to no penalty, but constructing a zero-strength
+    # regularizer object is needless overhead on every layer for the common case where
+    # no one asked for L2 at all.
+    kernel_regularizer = regularizers.l2(l2) if l2 else None
+
     model = Sequential()
     model.add(Input(shape=(n_features,)))
     for units in hidden_layer_sizes:
-        model.add(Dense(units, kernel_initializer="uniform", activation="relu"))
+        model.add(Dense(
+            units, kernel_initializer="uniform", activation="relu",
+            kernel_regularizer=kernel_regularizer,
+        ))
         model.add(Dropout(dropout))
     if task == "regression":
         model.add(Dense(1, kernel_initializer="normal", activation="linear"))
@@ -802,8 +816,9 @@ def ModelC(
         lsvm, svm, lr). For M="dl" (the Keras MLP, which has no
         scikit-learn constructor), the recognized keys are instead
         ``epochs``, ``hidden_layer_sizes``, ``learning_rate``,
-        ``nesterov``, ``optimizer`` ("adam"/"sgd"), ``dropout``, and
-        ``batch_size``.
+        ``nesterov``, ``optimizer`` ("adam"/"sgd"), ``dropout``, ``l2``
+        (L2 weight-regularization strength, default 0.0 -- no penalty),
+        and ``batch_size``.
 
     Returns
     -------
@@ -930,6 +945,7 @@ def ModelC(
             "optimizer": "adam",
             "dropout": 0.2,
             "batch_size": 16,
+            "l2": 0.0,
             **p,
         }
         np.random.seed(1)
@@ -944,6 +960,7 @@ def ModelC(
             dl_params["optimizer"],
             dl_params["learning_rate"],
             dl_params["nesterov"],
+            l2=dl_params["l2"],
         )
     else:
         raise ValueError(f"unknown model name M={M!r}")
@@ -964,6 +981,7 @@ def ModelC(
                 dl_params["optimizer"],
                 dl_params["learning_rate"],
                 dl_params["nesterov"],
+                l2=dl_params["l2"],
             )
             early_stopping = EarlyStopping(
                 monitor="val_loss", patience=5, restore_best_weights=True
