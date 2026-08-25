@@ -523,6 +523,7 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
             dl_params["nesterov"],
             task="regression",
             l2=dl_params["l2"],
+            rs=rs,
         )
     else:
         raise ValueError(f"unknown model name M={M!r}")
@@ -548,6 +549,7 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
                 dl_params["nesterov"],
                 task="regression",
                 l2=dl_params["l2"],
+                rs=rs,
             )
             early_stopping = EarlyStopping(
                 monitor="val_loss", patience=5, restore_best_weights=True
@@ -730,9 +732,11 @@ def _build_dl_model(
     nesterov,
     task="classification",
     l2=0.0,
+    rs=None,
 ):
     try:
         from keras import Sequential, optimizers, regularizers
+        from keras import utils as keras_utils
         from keras.layers import Dense, Dropout, Input
     except ImportError as e:
         raise ImportError(
@@ -741,6 +745,15 @@ def _build_dl_model(
             "'mlmolprop[dl]', and set the environment variable "
             "KERAS_BACKEND=torch before running."
         ) from e
+
+    # Without this, weight initialization, dropout masks, and (for optimizer="sgd")
+    # minibatch shuffling are all drawn from whatever global RNG state keras/torch
+    # happen to be in -- entirely independent of `rs` -- so two calls with identical
+    # arguments (including the same `rs`) produce different trained weights and
+    # different CV/test scores. Confirmed by hand: re-running an identical (task,
+    # params, rs) config gave a Q2_cv ~0.025 different from the original run.
+    if rs is not None:
+        keras_utils.set_random_seed(rs)
 
     # l2=0.0 (the default) passes kernel_regularizer=None -- keras.regularizers.l2(0.0)
     # would technically also work out to no penalty, but constructing a zero-strength
@@ -961,6 +974,7 @@ def ModelC(
             dl_params["learning_rate"],
             dl_params["nesterov"],
             l2=dl_params["l2"],
+            rs=rs,
         )
     else:
         raise ValueError(f"unknown model name M={M!r}")
@@ -982,6 +996,7 @@ def ModelC(
                 dl_params["learning_rate"],
                 dl_params["nesterov"],
                 l2=dl_params["l2"],
+                rs=rs,
             )
             early_stopping = EarlyStopping(
                 monitor="val_loss", patience=5, restore_best_weights=True

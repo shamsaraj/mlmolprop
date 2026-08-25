@@ -480,6 +480,27 @@ def test_modelc_dl_missing_keras_raises_informative_error(monkeypatch, clas_trai
 
 
 @pytest.mark.slow
+def test_modelc_dl_same_rs_reproduces_identical_weights(clas_train_test):
+    # Regression guard: _build_dl_model() never seeded keras/torch's own RNG from `rs`
+    # -- weight init, dropout masks, and (for optimizer="sgd") minibatch shuffling all
+    # came from whatever global random state keras/torch happened to be in, so two
+    # ModelC() calls with identical arguments (including the same rs) produced
+    # different trained weights and different CV/test scores. Caught by hand: a
+    # regularization-sweep script re-scoring an already-searched candidate got a
+    # materially different CV metric than the original search recorded for the exact
+    # same (params, rs).
+    pytest.importorskip("keras")
+    X_train, y_train, X_test, y_test, v_names = clas_train_test
+    params = {"epochs": 15, "hidden_layer_sizes": [8, 4], "batch_size": 8}
+
+    _result1, model1 = ModelC(X_train, y_train, X_test, y_test, v_names, M="dl", rs=7, params=params)
+    _result2, model2 = ModelC(X_train, y_train, X_test, y_test, v_names, M="dl", rs=7, params=params)
+
+    assert np.allclose(model1.get_weights()[0], model2.get_weights()[0])
+    assert _result1["test_MCC"] == pytest.approx(_result2["test_MCC"])
+
+
+@pytest.mark.slow
 def test_model_dl_actually_trains(reg_train_test):
     # Same regression guard as test_modelc_dl_actually_trains: compare
     # against a same-seed fresh (untrained) model rather than an error
