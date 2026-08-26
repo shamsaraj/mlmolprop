@@ -799,6 +799,16 @@ def _interval_loss(y_true, y_pred):
     ``y_true`` carries the interval as two columns (``conf_low``, ``conf_high``);
     ``y_pred`` is the usual single-column prediction. See :func:`ModelMT`'s
     ``Y_bounds`` parameter for how this gets wired into a real fit.
+
+    Returns the **per-sample** loss (shape ``(batch, 1)``), not a pre-reduced scalar --
+    Keras's own loss wrapper applies ``sample_weight`` and reduces to a scalar itself,
+    *after* calling this function, so returning an already-averaged scalar here would
+    make every row contribute equally to that average regardless of its
+    ``sample_weight`` (a real bug caught while adding per-row weighting: rows meant to
+    be fully excluded, sample_weight 0, were still pulling predictions toward their
+    dummy-filled bounds -- confirmed by a training run where predictions on real,
+    correctly-labeled rows landed systematically ~1.8 pIC50 units low, from unmasked
+    rows dragging the shared network toward their dummy [0, 0] target).
     """
     from keras import ops
 
@@ -806,7 +816,7 @@ def _interval_loss(y_true, y_pred):
     conf_high = y_true[:, 1:2]
     over = ops.relu(y_pred - conf_high)
     under = ops.relu(conf_low - y_pred)
-    return ops.mean(ops.square(over) + ops.square(under))
+    return ops.square(over) + ops.square(under)
 
 
 def _build_dl_mt_model(
@@ -930,9 +940,10 @@ def ModelMT(
         Whether to report the internal 5-fold CV metrics. Like ``Model()``'s
         ``M="dl"`` path, the internal CV fit always happens regardless of
         ``cv``; ``cv="off"`` only skips reporting it.
-    Y_bounds : dict[str, tuple[pandas.Series, pandas.Series]] or None
-        Optional ``{task: (conf_low, conf_high)}`` for tasks that should train
-        against :func:`_interval_loss` instead of plain MSE -- covers real
+    Y_bounds : dict[str, tuple] or None
+        Optional ``{task: (conf_low, conf_high)}`` or ``{task: (conf_low,
+        conf_high, row_weight)}`` for tasks that should train against
+        :func:`_interval_loss` instead of plain MSE -- covers real
         credible-interval labels and right-censored labels with one mechanism
         (a censored row's ``conf_low`` is a sentinel far below any real value,
         set by the caller, so only its upper bound constrains training). Every
@@ -944,6 +955,18 @@ def ModelMT(
         ``R2``/``Pearson``/etc. reporting below, which has no true value to
         score them against. Tasks not present in ``Y_bounds`` are completely
         unaffected -- today's plain-MSE behavior, unchanged.
+
+        The optional third element, ``row_weight``, multiplies each row's
+        presence-based weight -- use it to downweight rows whose bounds are
+        looser/less trustworthy than a real measurement (right-censored
+        labels, harvested labels mapped from another assay). This matters in
+        practice: a "free below the bound" censored label costs nothing to
+        satisfy once a prediction clears it, so when censored rows are a
+        large fraction of a task's training mass, satisfying them cheaply can
+        systematically bias predictions low even on real rows, via the
+        network they share -- downweighting keeps that from dominating the
+        real measurements' gradient contribution. Omit it (a 2-tuple) for
+        rows that should all count equally once present, same as before.
     task_weights : dict[str, float] or None
         Optional per-task loss weight (``model.compile(loss_weights=...)``).
         ``None`` means uniform weighting -- today's behavior.
@@ -985,13 +1008,33 @@ def ModelMT(
     # bounds_mask); plain-MSE tasks keep the original point-value/mask pair unchanged.
     # `mask`/`Y_filled` above stay exactly as before and still drive evaluation (real
     # point values only) further down -- fit_mask/fit_targets are fit()-only.
+    #
+    # Each Y_bounds[t] entry is (conf_low, conf_high) or (conf_low, conf_high,
+    # row_weight) -- the optional third element down-weights specific rows (e.g. a
+    # right-censored label relative to a real measurement) beyond plain presence/absence.
+    # This matters in practice, not just in principle: a "free below the bound" censored
+    # label costs nothing to satisfy once a prediction clears it, so when censored rows
+    # are a large fraction of a task's training mass, an early, cheap gradient signal to
+    # predict low across the board can dominate before the network learns to fit the
+    # real, narrower intervals -- systematically biasing predictions low even on real
+    # rows, via the trunk they share (confirmed empirically while building this: a
+    # trained model reached a healthy, converged loss yet still landed R2 around -5 on
+    # real rows, from a ~1.8-unit systematic downward offset despite a real 0.49
+    # prediction-truth correlation -- correlated but badly biased, exactly what an
+    # unweighted "free below" majority produces). Downweighting those rows' contribution
+    # relative to real measurements is the fix, not a training bug.
     fit_targets = {}
     fit_mask = dict(mask)
     for t in task_names:
         if t in interval_tasks:
-            conf_low, conf_high = Y_bounds[t]
+            bounds_entry = Y_bounds[t]
+            conf_low, conf_high = bounds_entry[0], bounds_entry[1]
             bounds_mask = conf_low.notna() & conf_high.notna()
-            fit_mask[t] = bounds_mask
+            if len(bounds_entry) == 3:
+                row_weight = bounds_entry[2]
+                fit_mask[t] = bounds_mask.astype(float) * row_weight.fillna(0.0)
+            else:
+                fit_mask[t] = bounds_mask
             fit_targets[t] = np.column_stack([
                 conf_low.fillna(0.0).to_numpy(), conf_high.fillna(0.0).to_numpy(),
             ])

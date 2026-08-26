@@ -822,6 +822,12 @@ def test_modelcmt_same_rs_reproduces_identical_weights(clasmt_train_test):
 
 
 def test_interval_loss_zero_inside_bounds_positive_outside():
+    # _interval_loss() must return the *per-sample* loss (shape (n, 1)), not an
+    # already-reduced scalar -- Keras's own loss wrapper is what applies sample_weight
+    # and reduces to a scalar, after calling this function; pre-reducing here would make
+    # every row count equally regardless of its own sample_weight (the actual bug this
+    # per-sample assertion guards against -- caught via a real training run where
+    # supposedly-excluded rows still visibly pulled predictions off target).
     pytest.importorskip("keras")
     from mlmolprop.model import _interval_loss
 
@@ -830,13 +836,17 @@ def test_interval_loss_zero_inside_bounds_positive_outside():
     y_true = np.column_stack([conf_low, conf_high]).astype("float32")
 
     inside = np.array([[3.0], [4.0]], dtype="float32")  # midpoints, well inside each interval
-    assert float(_interval_loss(y_true, inside)) == pytest.approx(0.0)
+    per_sample_inside = np.ravel(np.asarray(_interval_loss(y_true, inside)))
+    assert per_sample_inside.shape == (2,)
+    assert per_sample_inside == pytest.approx([0.0, 0.0])
 
     above = np.array([[6.0], [7.0]], dtype="float32")  # 2 above each conf_high
-    assert float(_interval_loss(y_true, above)) == pytest.approx((2.0**2 + 2.0**2) / 2)
+    per_sample_above = np.ravel(np.asarray(_interval_loss(y_true, above)))
+    assert per_sample_above == pytest.approx([4.0, 4.0])  # 2**2 each, independently -- not averaged
 
     below = np.array([[0.0], [1.0]], dtype="float32")  # 2 below each conf_low
-    assert float(_interval_loss(y_true, below)) == pytest.approx((2.0**2 + 2.0**2) / 2)
+    per_sample_below = np.ravel(np.asarray(_interval_loss(y_true, below)))
+    assert per_sample_below == pytest.approx([4.0, 4.0])
 
 
 @pytest.mark.slow
@@ -909,6 +919,97 @@ def test_modelmt_y_bounds_censored_rows_influence_training(regmt_train_test):
     _rB, _cvB, modelB, _aB = ModelMT(
         X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params,
         Y_bounds={"task_a": (conf_low_b, conf_high_b)},
+    )
+
+    assert not np.allclose(modelA.get_weights()[0], modelB.get_weights()[0])
+
+
+def test_dl_mt_model_interval_loss_row_weight_zero_ignores_row_value(regmt_train_test):
+    # Same correctness property as test_dl_mt_model_sample_weight_zero_ignores_row_value
+    # (a row with sample_weight=0 must not influence training regardless of what its
+    # target is filled with), for the row_weight mechanism specifically: row_weight=0
+    # combined with the presence mask must zero a row's sample_weight exactly, no matter
+    # how wrong its (dummy) bounds are. Tested directly against
+    # _build_dl_mt_model()/.fit() (what ModelMT() does internally, including how it
+    # derives fit_mask from row_weight) rather than through ModelMT()'s own CV-loop
+    # pipeline -- that pipeline's extra stochastic training steps (5 fold-fits before
+    # the one this test cares about) introduce ordinary floating-point noise that would
+    # otherwise mask an exact-equality check like this one.
+    keras = pytest.importorskip("keras")
+    from mlmolprop.model import _build_dl_mt_model
+
+    X_train, Y_train, _X_test, _Y_test, v_names = regmt_train_test
+    task_names = list(Y_train.columns)
+    X_array = np.array(X_train)
+
+    conf_low_a = (Y_train["task_a"] - 0.3).to_numpy()
+    conf_high_a = (Y_train["task_a"] + 0.3).to_numpy()
+    target_a = np.column_stack([conf_low_a, conf_high_a])
+    target_a_wrong = target_a.copy()
+    zero_rows = Y_train["task_b"].isna().to_numpy()  # reuse this fixture's masked slice
+    target_a_wrong[zero_rows] = [-10.0, 999.0]  # obviously wrong bounds, only at zero-weighted rows
+
+    sw_a = np.ones(len(Y_train))
+    sw_a[zero_rows] = 0.0  # what ModelMT() would derive from bounds_mask * row_weight=0 there
+    sw_b = Y_train["task_b"].notna().to_numpy(dtype=float)
+    Y_b_filled = Y_train["task_b"].fillna(0.0).to_numpy()
+
+    build_kwargs = {
+        "hidden_layer_sizes": [4], "dropout": 0.0, "optimizer": "adam",
+        "learning_rate": 0.01, "nesterov": True, "task": "regression",
+        "interval_tasks": {"task_a"},
+    }
+
+    keras.utils.set_random_seed(0)
+    model_a = _build_dl_mt_model(len(v_names), task_names, **build_kwargs)
+    model_a.fit(
+        X_array, {"task_a": target_a, "task_b": Y_b_filled},
+        sample_weight={"task_a": sw_a, "task_b": sw_b},
+        batch_size=8, epochs=10, verbose=0,
+    )
+
+    keras.utils.set_random_seed(0)
+    model_b = _build_dl_mt_model(len(v_names), task_names, **build_kwargs)
+    model_b.fit(
+        X_array, {"task_a": target_a_wrong, "task_b": Y_b_filled},
+        sample_weight={"task_a": sw_a, "task_b": sw_b},
+        batch_size=8, epochs=10, verbose=0,
+    )
+
+    assert np.allclose(model_a.get_weights()[0], model_b.get_weights()[0])
+
+
+@pytest.mark.slow
+def test_modelmt_y_bounds_row_weight_scales_influence(regmt_train_test):
+    # Beyond the on/off case above: two different nonzero row_weights on the same rows
+    # must actually train differently, proving the weight's *magnitude* matters, not
+    # just whether it's zero.
+    keras = pytest.importorskip("keras")
+    X_train, Y_train, X_test, Y_test, v_names = regmt_train_test
+    params = {"epochs": 10, "hidden_layer_sizes": [4], "batch_size": 8}
+
+    conf_low = Y_train["task_a"] - 0.3
+    conf_high = Y_train["task_a"] + 0.3
+    censored_rows = Y_train["task_b"].isna()
+
+    conf_low_wide = conf_low.copy()
+    conf_high_wide = conf_high.copy()
+    conf_low_wide[censored_rows] = -10.0
+    conf_high_wide[censored_rows] = -5.0  # a "free below the bound" style censored region
+
+    weight_full = pd.Series(1.0, index=Y_train.index)
+    weight_low = weight_full.copy()
+    weight_low[censored_rows] = 0.05
+
+    keras.utils.set_random_seed(0)
+    _rA, _cvA, modelA, _aA = ModelMT(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params,
+        Y_bounds={"task_a": (conf_low_wide, conf_high_wide, weight_full)},
+    )
+    keras.utils.set_random_seed(0)
+    _rB, _cvB, modelB, _aB = ModelMT(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params,
+        Y_bounds={"task_a": (conf_low_wide, conf_high_wide, weight_low)},
     )
 
     assert not np.allclose(modelA.get_weights()[0], modelB.get_weights()[0])
