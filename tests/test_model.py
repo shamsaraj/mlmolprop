@@ -11,7 +11,9 @@ import mlmolprop.model as model_module
 from mlmolprop.model import (
     Model,
     ModelC,
+    ModelCMMoE,
     ModelCMT,
+    ModelMMoE,
     ModelMT,
     clus_uns,
     metr,
@@ -815,6 +817,187 @@ def test_modelcmt_same_rs_reproduces_identical_weights(clasmt_train_test):
 
     _r1, model1 = ModelCMT(X_train, Y_train, X_test, Y_test, v_names, rs=7, params=params)
     _r2, model2 = ModelCMT(X_train, Y_train, X_test, Y_test, v_names, rs=7, params=params)
+
+    assert np.allclose(model1.get_weights()[0], model2.get_weights()[0])
+
+
+def test_build_dl_mmoe_model_output_heads_named_per_task():
+    pytest.importorskip("keras")
+    from mlmolprop.model import _build_dl_mmoe_model
+
+    reg_model = _build_dl_mmoe_model(
+        4, ["task_a", "task_b"], hidden_layer_sizes=[8], n_experts=3, dropout=0.2,
+        optimizer="adam", learning_rate=0.01, nesterov=True, task="regression",
+    )
+    assert set(reg_model.output_names) == {"task_a", "task_b"}
+    reg_heads = {layer.name: layer for layer in reg_model.layers if layer.name in ("task_a", "task_b")}
+    assert reg_heads["task_a"].activation.__name__ == "linear"
+    assert reg_heads["task_b"].activation.__name__ == "linear"
+    # 3 experts -> 3 independent Dense(8) expert layers (plus the 2 gates + 2 heads).
+    expert_dense_layers = [layer for layer in reg_model.layers if isinstance(layer, type(reg_heads["task_a"])) and layer.units == 8]
+    assert len(expert_dense_layers) == 3
+
+    clas_model = _build_dl_mmoe_model(
+        4, ["task_a", "task_b"], hidden_layer_sizes=[8], n_experts=3, dropout=0.2,
+        optimizer="adam", learning_rate=0.01, nesterov=True, task="classification",
+    )
+    clas_heads = {layer.name: layer for layer in clas_model.layers if layer.name in ("task_a", "task_b")}
+    assert clas_heads["task_a"].activation.__name__ == "sigmoid"
+    assert clas_heads["task_b"].activation.__name__ == "sigmoid"
+
+
+@pytest.mark.slow
+def test_modelmmoe_actually_trains(regmt_train_test):
+    keras = pytest.importorskip("keras")
+    from mlmolprop.model import _build_dl_mmoe_model
+
+    X_train, Y_train, X_test, Y_test, v_names = regmt_train_test
+    task_names = list(Y_train.columns)
+
+    keras.utils.set_random_seed(0)
+    fresh_model = _build_dl_mmoe_model(
+        len(v_names), task_names, hidden_layer_sizes=[8, 4], n_experts=3, dropout=0.2,
+        optimizer="adam", learning_rate=0.01, nesterov=True, task="regression",
+    )
+    fresh_weights = fresh_model.get_weights()[0].copy()
+
+    keras.utils.set_random_seed(0)
+    results_by_task, cv_by_task, fitted_model, analysis_by_task = ModelMMoE(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0,
+        params={"epochs": 20, "hidden_layer_sizes": [8, 4], "n_experts": 3, "batch_size": 8},
+    )
+    trained_weights = fitted_model.get_weights()[0]
+
+    assert not np.allclose(fresh_weights, trained_weights)
+    for t in task_names:
+        assert "R2" in results_by_task[t]
+        assert cv_by_task[t] is not None
+        assert analysis_by_task[t] is not None
+
+
+@pytest.mark.slow
+def test_modelcmmoe_actually_trains(clasmt_train_test):
+    keras = pytest.importorskip("keras")
+    from mlmolprop.model import _build_dl_mmoe_model
+
+    X_train, Y_train, X_test, Y_test, v_names = clasmt_train_test
+    task_names = list(Y_train.columns)
+
+    keras.utils.set_random_seed(0)
+    fresh_model = _build_dl_mmoe_model(
+        len(v_names), task_names, hidden_layer_sizes=[8, 4], n_experts=3, dropout=0.2,
+        optimizer="adam", learning_rate=0.01, nesterov=True, task="classification",
+    )
+    fresh_weights = fresh_model.get_weights()[0].copy()
+
+    keras.utils.set_random_seed(0)
+    results_by_task, fitted_model = ModelCMMoE(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0,
+        params={"epochs": 20, "hidden_layer_sizes": [8, 4], "n_experts": 3, "batch_size": 8},
+    )
+    trained_weights = fitted_model.get_weights()[0]
+
+    assert not np.allclose(fresh_weights, trained_weights)
+    for t in task_names:
+        assert results_by_task[t]["test_AC"] >= 0.0
+        assert results_by_task[t]["CV_metrics"] is not None
+
+
+def test_modelcmmoe_plot_true_creates_figures_per_task(clasmt_train_test):
+    pytest.importorskip("keras")
+    import matplotlib.pyplot as plt
+
+    X_train, Y_train, X_test, Y_test, v_names = clasmt_train_test
+    task_names = list(Y_train.columns)
+    params = {"epochs": 5, "hidden_layer_sizes": [4], "n_experts": 2, "batch_size": 8}
+
+    plt.close("all")
+    ModelCMMoE(X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params, plot=True)
+    assert len(plt.get_fignums()) == 3 * len(task_names)
+    plt.close("all")
+
+    ModelCMMoE(X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params)
+    assert len(plt.get_fignums()) == 0
+
+
+def test_dl_mmoe_model_sample_weight_zero_ignores_row_value(regmt_train_test):
+    # Same correctness property as test_dl_mt_model_sample_weight_zero_ignores_row_value,
+    # for the MMoE builder: a zero-weighted row's underlying (dummy) value must not
+    # affect the trained weights.
+    keras = pytest.importorskip("keras")
+    from mlmolprop.model import _build_dl_mmoe_model
+
+    X_train, Y_train, _X_test, _Y_test, v_names = regmt_train_test
+    task_names = list(Y_train.columns)
+    X_array = np.array(X_train)
+    mask = Y_train.notna()
+
+    Y_a = Y_train.fillna(0.0)
+    Y_b = Y_train.fillna(0.0)
+    Y_b.loc[~mask["task_b"], "task_b"] = 999.0
+
+    build_kwargs = {
+        "hidden_layer_sizes": [4], "n_experts": 2, "dropout": 0.0, "optimizer": "adam",
+        "learning_rate": 0.01, "nesterov": True, "task": "regression",
+    }
+
+    keras.utils.set_random_seed(0)
+    model_a = _build_dl_mmoe_model(len(v_names), task_names, **build_kwargs)
+    model_a.fit(
+        X_array,
+        {t: Y_a[t].to_numpy() for t in task_names},
+        sample_weight={t: mask[t].to_numpy(dtype=float) for t in task_names},
+        batch_size=8, epochs=10, verbose=0,
+    )
+
+    keras.utils.set_random_seed(0)
+    model_b = _build_dl_mmoe_model(len(v_names), task_names, **build_kwargs)
+    model_b.fit(
+        X_array,
+        {t: Y_b[t].to_numpy() for t in task_names},
+        sample_weight={t: mask[t].to_numpy(dtype=float) for t in task_names},
+        batch_size=8, epochs=10, verbose=0,
+    )
+
+    assert np.allclose(model_a.get_weights()[0], model_b.get_weights()[0])
+
+
+def test_modelmmoe_missing_keras_raises_informative_error(monkeypatch, regmt_train_test):
+    X_train, Y_train, X_test, Y_test, v_names = regmt_train_test
+    monkeypatch.setitem(sys.modules, "keras", None)
+
+    with pytest.raises(ImportError, match=r"pip install 'mlmolprop\[dl\]'"):
+        ModelMMoE(X_train, Y_train, X_test, Y_test, v_names, rs=0)
+
+
+def test_modelcmmoe_missing_keras_raises_informative_error(monkeypatch, clasmt_train_test):
+    X_train, Y_train, X_test, Y_test, v_names = clasmt_train_test
+    monkeypatch.setitem(sys.modules, "keras", None)
+
+    with pytest.raises(ImportError, match=r"pip install 'mlmolprop\[dl\]'"):
+        ModelCMMoE(X_train, Y_train, X_test, Y_test, v_names, rs=0)
+
+
+@pytest.mark.slow
+def test_modelmmoe_same_rs_reproduces_identical_weights(regmt_train_test):
+    pytest.importorskip("keras")
+    X_train, Y_train, X_test, Y_test, v_names = regmt_train_test
+    params = {"epochs": 15, "hidden_layer_sizes": [8, 4], "n_experts": 3, "batch_size": 8}
+
+    _r1, _cv1, model1, _a1 = ModelMMoE(X_train, Y_train, X_test, Y_test, v_names, rs=7, params=params)
+    _r2, _cv2, model2, _a2 = ModelMMoE(X_train, Y_train, X_test, Y_test, v_names, rs=7, params=params)
+
+    assert np.allclose(model1.get_weights()[0], model2.get_weights()[0])
+
+
+@pytest.mark.slow
+def test_modelcmmoe_same_rs_reproduces_identical_weights(clasmt_train_test):
+    pytest.importorskip("keras")
+    X_train, Y_train, X_test, Y_test, v_names = clasmt_train_test
+    params = {"epochs": 15, "hidden_layer_sizes": [8, 4], "n_experts": 3, "batch_size": 8}
+
+    _r1, model1 = ModelCMMoE(X_train, Y_train, X_test, Y_test, v_names, rs=7, params=params)
+    _r2, model2 = ModelCMMoE(X_train, Y_train, X_test, Y_test, v_names, rs=7, params=params)
 
     assert np.allclose(model1.get_weights()[0], model2.get_weights()[0])
 

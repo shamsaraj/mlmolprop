@@ -1027,6 +1027,237 @@ def ModelMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./
     return results_by_task, List_by_task, model, analysis_by_task
 
 
+def _build_dl_mmoe_model(
+    n_features,
+    task_names,
+    hidden_layer_sizes,
+    n_experts,
+    dropout,
+    optimizer,
+    learning_rate,
+    nesterov,
+    task="regression",
+    l2=0.0,
+    rs=None,
+):
+    """MMoE (Ma et al. 2018) counterpart of :func:`_build_dl_mt_model`: instead of
+    one hard-shared trunk every task is forced through, ``n_experts`` independent
+    expert subnetworks (each its own ``Input -> [Dense(relu)+Dropout]*`` stack per
+    ``hidden_layer_sizes`` -- now each expert's own architecture, not one shared
+    trunk's) feed a per-task learned gate (``Dense(n_experts,
+    activation="softmax")`` on the raw input) that weights how much that task's
+    output draws from each expert -- letting a task down-weight experts shaped
+    mostly by other tasks' gradients, instead of sharing one representation
+    outright.
+
+    Combine step (the standard Keras MMoE pattern): stack the experts' outputs
+    into one ``(batch, n_experts, expert_dim)`` tensor via
+    ``keras.ops.stack`` (backend-agnostic -- verified working with this project's
+    torch backend), then contract each task's gate against it with
+    ``keras.layers.Dot(axes=(1, 1))`` to get that task's gated ``(batch,
+    expert_dim)`` representation. Same linear/``mse`` vs sigmoid/
+    ``binary_crossentropy`` split ``_build_dl_mt_model`` already makes for the
+    final per-task ``Dense(1)`` head.
+    """
+    try:
+        from keras import Model as KerasModel
+        from keras import ops, optimizers, regularizers
+        from keras import utils as keras_utils
+        from keras.layers import Dense, Dot, Dropout, Input, Lambda
+    except ImportError as e:
+        raise ImportError(
+            "ModelMMoE()/ModelCMMoE() require the optional 'dl' extra (keras plus "
+            "the PyTorch backend engine). Install with: pip install "
+            "'mlmolprop[dl]', and set the environment variable "
+            "KERAS_BACKEND=torch before running."
+        ) from e
+
+    if rs is not None:
+        keras_utils.set_random_seed(rs)
+
+    kernel_regularizer = regularizers.l2(l2) if l2 else None
+
+    inputs = Input(shape=(n_features,))
+
+    experts = []
+    for _ in range(n_experts):
+        h = inputs
+        for units in hidden_layer_sizes:
+            h = Dense(
+                units, kernel_initializer="uniform", activation="relu",
+                kernel_regularizer=kernel_regularizer,
+            )(h)
+            h = Dropout(dropout)(h)
+        experts.append(h)
+    expert_stack = Lambda(lambda x: ops.stack(x, axis=1))(experts)
+
+    if task == "regression":
+        activation, loss_name, metrics_list = "linear", "mse", ["mae"]
+    else:
+        activation, loss_name, metrics_list = "sigmoid", "binary_crossentropy", ["accuracy"]
+
+    outputs = {}
+    for name in task_names:
+        gate = Dense(n_experts, activation="softmax", name=f"{name}_gate")(inputs)
+        gated = Dot(axes=(1, 1))([gate, expert_stack])
+        outputs[name] = Dense(1, kernel_initializer="normal", activation=activation, name=name)(gated)
+    loss = {name: loss_name for name in task_names}
+    metrics = {name: metrics_list for name in task_names}
+
+    model = KerasModel(inputs=inputs, outputs=outputs)
+
+    if optimizer == "sgd":
+        opt = optimizers.SGD(learning_rate=learning_rate, momentum=0.9, nesterov=nesterov)
+    else:
+        opt = optimizers.Adam(learning_rate=learning_rate)
+    model.compile(loss=loss, optimizer=opt, metrics=metrics)
+    return model
+
+
+def ModelMMoE(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./"):
+    """MMoE counterpart of :func:`ModelMT`: fit one shared-experts Keras MLP (see
+    :func:`_build_dl_mmoe_model`), with ``n_experts`` shared expert subnetworks and
+    a per-task learned gate, instead of ``ModelMT()``'s single hard-shared trunk
+    every task is forced through equally.
+
+    Same shared-``x``/masked-``Y`` contract, internal-CV/masking/metrics logic, and
+    return shape as :func:`ModelMT` -- see its docstring for everything that
+    doesn't differ. ``params`` recognizes one extra key: ``n_experts`` (default 4).
+
+    Returns
+    -------
+    tuple
+        ``(results_by_task, List_by_task, model, analysis_by_task)`` -- same
+        shape as :func:`ModelMT`'s return.
+    """
+    from keras.callbacks import EarlyStopping
+
+    task_names = list(Y.columns)
+    p = dict(params or {})
+    dl_params = {
+        "epochs": 300,
+        "hidden_layer_sizes": (500, 1000),
+        "n_experts": 4,
+        "learning_rate": 0.01,
+        "nesterov": True,
+        "optimizer": "adam",
+        "dropout": 0.2,
+        "batch_size": 16,
+        "l2": 0.0,
+        **p,
+    }
+
+    X_array = np.array(x)
+    mask = Y.notna()
+    Y_filled = Y.fillna(0.0)
+    mask_test = Ytest.notna()
+
+    def _build():
+        return _build_dl_mmoe_model(
+            len(v_names), task_names,
+            dl_params["hidden_layer_sizes"], dl_params["n_experts"], dl_params["dropout"],
+            dl_params["optimizer"], dl_params["learning_rate"], dl_params["nesterov"],
+            task="regression", l2=dl_params["l2"], rs=rs,
+        )
+
+    ytests_by_task = {t: [] for t in task_names}
+    ypreds_by_task = {t: [] for t in task_names}
+
+    loo = KFold(n_splits=5, shuffle=True, random_state=rs)
+    for train_idx, test_idx in loo.split(X_array):
+        X_train, X_test = X_array[train_idx], X_array[test_idx]
+        model2 = _build()
+        model2.fit(
+            X_train,
+            {t: Y_filled[t].to_numpy()[train_idx] for t in task_names},
+            sample_weight={t: mask[t].to_numpy(dtype=float)[train_idx] for t in task_names},
+            batch_size=dl_params["batch_size"],
+            epochs=dl_params["epochs"],
+            validation_data=(
+                X_test,
+                {t: Y_filled[t].to_numpy()[test_idx] for t in task_names},
+                {t: mask[t].to_numpy(dtype=float)[test_idx] for t in task_names},
+            ),
+            callbacks=[EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)],
+            verbose=0,
+        )
+        preds = model2.predict(X_test, verbose=0)
+        for t in task_names:
+            pred_t = np.ravel(preds[t])
+            keep = mask[t].to_numpy()[test_idx]
+            ytests_by_task[t] += list(Y_filled[t].to_numpy()[test_idx][keep])
+            ypreds_by_task[t] += list(pred_t[keep])
+
+    model = _build()
+    model.fit(
+        X_array,
+        {t: Y_filled[t].to_numpy() for t in task_names},
+        sample_weight={t: mask[t].to_numpy(dtype=float) for t in task_names},
+        batch_size=dl_params["batch_size"],
+        epochs=dl_params["epochs"],
+        callbacks=[EarlyStopping(monitor="loss", patience=5, restore_best_weights=True)],
+        verbose=0,
+    )
+
+    y_predict_train_by_task = model.predict(X_array, verbose=0)
+    y_predict_test_by_task = model.predict(np.array(xtest), verbose=0)
+
+    results_by_task = {}
+    List_by_task = {} if cv != "off" else None
+    analysis_by_task = {} if cv != "off" else None
+
+    for t in task_names:
+        train_keep = mask[t].to_numpy()
+        test_keep = mask_test[t].to_numpy()
+
+        y_train_t = Y[t].to_numpy()[train_keep]
+        y_pred_train_t = np.ravel(y_predict_train_by_task[t])[train_keep]
+        y_test_t = Ytest[t].to_numpy()[test_keep]
+        y_pred_test_t = np.ravel(y_predict_test_by_task[t])[test_keep]
+
+        R2 = q2r2(y_train_t, y_pred_train_t)
+        R2test = r2test(y_test_t, y_pred_test_t, y_train_t)
+        Pearson = stats.pearsonr(y_test_t, y_pred_test_t)
+        model_mse_test = mean_squared_error(y_pred_test_t, y_test_t)
+        try:
+            f = F(y_train_t, y_pred_train_t, k=len(v_names))
+        except ValueError:
+            f = float("nan")
+
+        results_by_task[t] = {
+            "R2": R2,
+            "Mean_squared_error_test": model_mse_test,
+            "R2_test": R2test,
+            "F": f,
+            "Variable Importance": "",
+            "Pearson": Pearson,
+        }
+
+        # Same empty-fold guard as ModelMT() -- a sparsely-labeled task can, in
+        # principle, end up with zero accumulated CV rows.
+        if cv != "off" and ytests_by_task[t]:
+            q2 = q2r2(ytests_by_task[t], ypreds_by_task[t])
+            rmse = RMSEP_CV_C(ytests_by_task[t], ypreds_by_task[t])
+            q2f2 = r2test(y_test_t, y_pred_test_t, y_test_t)
+            List_by_task[t] = {"q2": q2, "RMSECV": rmse, "Q2F2": q2f2}
+            analysis_by_task[t] = analyse(
+                y_train_t, y_pred_train_t, y_test_t, y_pred_test_t,
+                ytests_by_task[t], ypreds_by_task[t], k=len(v_names),
+            )
+        elif cv != "off":
+            List_by_task[t] = None
+            analysis_by_task[t] = None
+
+        y1 = pd.DataFrame(y_train_t, index=x.index[train_keep], columns=["observed"])
+        y2 = pd.DataFrame(y_pred_train_t, index=x.index[train_keep], columns=["predicted"])
+        pd.concat([y1, y2], axis=1).to_csv(f"{path}{t}_train.csv")
+        y4 = pd.DataFrame(y_test_t, index=xtest.index[test_keep], columns=["observed"])
+        y5 = pd.DataFrame(y_pred_test_t, index=xtest.index[test_keep], columns=["predicted"])
+        pd.concat([y4, y5], axis=1).to_csv(f"{path}{t}_test.csv")
+
+    return results_by_task, List_by_task, model, analysis_by_task
+
+
 def ModelC(
     x,
     y,
@@ -1708,6 +1939,175 @@ def ModelCMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path=".
             # tn/fp/fn/tp unpack above is metr()'s input order, not the plotted layout) --
             # [0][0]/[1][1] are TP/TN, [0][1]/[1][0] are FN/FP, so "Active" (label 1) shows
             # top-left instead of sklearn's default TN-top-left layout.
+            panels = [
+                (cnf.copy(), tp, tn, fn, fp, f"{t} -- Train set"),
+                (cnf2.copy(), tpt, tnt, fnt, fpt, f"{t} -- Test set"),
+            ]
+            if cv_panel is not None:
+                panels.append(cv_panel)
+            for panel_cnf, panel_tp, panel_tn, panel_fn, panel_fp, title in panels:
+                panel_cnf[0][0], panel_cnf[1][1] = panel_tp, panel_tn
+                panel_cnf[0][1], panel_cnf[1][0] = panel_fn, panel_fp
+                plt.figure(figsize=(8, 7))
+                plot_confusion_matrix(panel_cnf, classes=["Active", "Inactive"], title=title)
+                plt.ylabel("Actual", fontsize=24, fontweight="bold")
+                plt.xlabel("Predicted", fontsize=24, fontweight="bold")
+                plt.tight_layout()
+
+        results_by_task[t] = {
+            "train_AC": trainmetrics["AC"],
+            "train_SEN": trainmetrics["SEN"],
+            "train_SPEC": trainmetrics["SPEC"],
+            "train_PREC": trainmetrics["PREC"],
+            "train_F": trainmetrics["F"],
+            "train_MCC": trainmetrics["MCC"],
+            "test_AC": testmetrics["AC"],
+            "test_SEN": testmetrics["SEN"],
+            "test_SPEC": testmetrics["SPEC"],
+            "test_PREC": testmetrics["PREC"],
+            "test_F": testmetrics["F"],
+            "test_MCC": testmetrics["MCC"],
+            "CV_metrics": cvmetrics,
+        }
+
+    return results_by_task, model
+
+
+def ModelCMMoE(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./", plot=False):
+    """MMoE counterpart of :func:`ModelCMT`: fit one shared-experts Keras MLP (see
+    :func:`_build_dl_mmoe_model`), with ``n_experts`` shared expert subnetworks and
+    a per-task learned gate, instead of ``ModelCMT()``'s single hard-shared trunk.
+
+    Same shared-``x``/masked-``Y`` contract, "balanced" class-weight-as-
+    ``sample_weight`` handling, plain-``KFold`` internal CV, and ``plot=True``
+    per-task confusion-matrix plotting as :func:`ModelCMT` -- see its docstring
+    for everything that doesn't differ. ``params`` recognizes one extra key:
+    ``n_experts`` (default 4).
+
+    Returns
+    -------
+    tuple
+        ``(results_by_task, model)`` -- same shape as :func:`ModelCMT`'s return.
+    """
+    from keras.callbacks import EarlyStopping
+    from sklearn.utils.class_weight import compute_class_weight
+
+    task_names = list(Y.columns)
+    p = dict(params or {})
+    dl_params = {
+        "epochs": 300,
+        "hidden_layer_sizes": (500, 1000),
+        "n_experts": 4,
+        "learning_rate": 0.01,
+        "nesterov": True,
+        "optimizer": "adam",
+        "dropout": 0.2,
+        "batch_size": 16,
+        "l2": 0.0,
+        **p,
+    }
+
+    X_array = np.array(x)
+    mask = Y.notna()
+    Y_filled = Y.fillna(0).astype(int)
+    mask_test = Ytest.notna()
+    Ytest_filled = Ytest.fillna(0).astype(int)
+
+    # Computed once from the full training Y, then sliced per CV fold below -- rows
+    # where a task's label is missing get weight 0 regardless of their (dummy)
+    # filled label, so per-fold class balance doesn't need recomputing from each
+    # fold's own (already-masked) subset.
+    sample_weight_full = {}
+    for t in task_names:
+        labels_present = Y.loc[mask[t], t].to_numpy()
+        cw = dict(enumerate(compute_class_weight("balanced", classes=np.array([0, 1]), y=labels_present)))
+        labels = Y_filled[t].to_numpy()
+        weights = np.where(labels == 1, cw[1], cw[0]).astype(float)
+        sample_weight_full[t] = weights * mask[t].to_numpy(dtype=float)
+
+    def _build():
+        return _build_dl_mmoe_model(
+            len(v_names), task_names,
+            dl_params["hidden_layer_sizes"], dl_params["n_experts"], dl_params["dropout"],
+            dl_params["optimizer"], dl_params["learning_rate"], dl_params["nesterov"],
+            task="classification", l2=dl_params["l2"], rs=rs,
+        )
+
+    ytests_by_task = {t: [] for t in task_names}
+    ypreds_by_task = {t: [] for t in task_names}
+
+    loo = KFold(n_splits=5, shuffle=True, random_state=rs)
+    for train_idx, test_idx in loo.split(X_array):
+        X_train, X_test = X_array[train_idx], X_array[test_idx]
+        model2 = _build()
+        model2.fit(
+            X_train,
+            {t: Y_filled[t].to_numpy()[train_idx] for t in task_names},
+            sample_weight={t: sample_weight_full[t][train_idx] for t in task_names},
+            batch_size=dl_params["batch_size"],
+            epochs=dl_params["epochs"],
+            validation_data=(
+                X_test,
+                {t: Y_filled[t].to_numpy()[test_idx] for t in task_names},
+                {t: sample_weight_full[t][test_idx] for t in task_names},
+            ),
+            callbacks=[EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)],
+            verbose=0,
+        )
+        preds = model2.predict(X_test, verbose=0)
+        for t in task_names:
+            pred_t = (np.ravel(preds[t]) > 0.5).astype(int)
+            keep = mask[t].to_numpy()[test_idx]
+            ytests_by_task[t] += list(Y_filled[t].to_numpy()[test_idx][keep])
+            ypreds_by_task[t] += list(pred_t[keep])
+
+    model = _build()
+    model.fit(
+        X_array,
+        {t: Y_filled[t].to_numpy() for t in task_names},
+        sample_weight=sample_weight_full,
+        batch_size=dl_params["batch_size"],
+        epochs=dl_params["epochs"],
+        callbacks=[EarlyStopping(monitor="loss", patience=5, restore_best_weights=True)],
+        verbose=0,
+    )
+
+    y_predict_train_by_task = model.predict(X_array, verbose=0)
+    y_predict_test_by_task = model.predict(np.array(xtest), verbose=0)
+
+    results_by_task = {}
+    for t in task_names:
+        train_keep = mask[t].to_numpy()
+        test_keep = mask_test[t].to_numpy()
+
+        y_train_t = Y_filled[t].to_numpy()[train_keep]
+        pred_train_t = (np.ravel(y_predict_train_by_task[t]) > 0.5).astype(int)[train_keep]
+        y_test_t = Ytest_filled[t].to_numpy()[test_keep]
+        pred_test_t = (np.ravel(y_predict_test_by_task[t]) > 0.5).astype(int)[test_keep]
+
+        cnf = confusion_matrix(y_train_t, pred_train_t, labels=[0, 1])
+        cnf2 = confusion_matrix(y_test_t, pred_test_t, labels=[0, 1])
+        tn, fp, fn, tp = cnf.ravel()
+        tnt, fpt, fnt, tpt = cnf2.ravel()
+        trainmetrics = metr(tp, tn, fp, fn)
+        testmetrics = metr(tpt, tnt, fpt, fnt)
+
+        # Same empty-fold guard as ModelMMoE() -- a sparsely-labeled task can, in
+        # principle, end up with zero accumulated CV rows.
+        cv_panel = None
+        if cv != "off" and ytests_by_task[t]:
+            cnf3 = confusion_matrix(ytests_by_task[t], ypreds_by_task[t], labels=[0, 1])
+            tnc, fpc, fnc, tpc = cnf3.ravel()
+            cvmetrics = metr(tpc, tnc, fpc, fnc)
+            cv_panel = (cnf3.copy(), tpc, tnc, fnc, fpc, f"{t} -- Cross-Validation")
+        else:
+            cvmetrics = None
+
+        if plot:
+            # Same TP/TN/FN/FP display reorder ModelC()/ModelCMT() apply before
+            # plotting -- [0][0]/[1][1] are TP/TN, [0][1]/[1][0] are FN/FP, so
+            # "Active" (label 1) shows top-left instead of sklearn's default
+            # TN-top-left layout.
             panels = [
                 (cnf.copy(), tp, tn, fn, fp, f"{t} -- Train set"),
                 (cnf2.copy(), tpt, tnt, fnt, fpt, f"{t} -- Test set"),
