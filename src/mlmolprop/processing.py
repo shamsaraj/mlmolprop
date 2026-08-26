@@ -6,6 +6,8 @@ import pickle
 
 import numpy as np
 import pandas as pd
+from rdkit import Chem
+from rdkit.Chem.Scaffolds import MurckoScaffold
 from sklearn import preprocessing
 from sklearn.feature_selection import (
     RFE,
@@ -16,7 +18,7 @@ from sklearn.feature_selection import (
     f_regression,
 )
 from sklearn.linear_model import ElasticNet, LinearRegression, LogisticRegression
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
 from .correlation import find_correlation
 from .descriptors import CI
@@ -406,6 +408,51 @@ def data_prep(
     result = [X_train, y_train, X_test, y_test, v_names, Xnormalized, Xscaled, v_names2]
     object2file(result, output)
     return result
+
+
+def scaffold_split(names, smiles, test_size: float = 0.2, rs: int | None = None):
+    """Train/test split grouped by Bemis-Murcko scaffold, not by row.
+
+    A plain ``train_test_split()`` can put near-identical structural analogs of the same
+    compound on both sides of the split -- inflating apparent generalization on datasets
+    that include such analogs (e.g. an "analog expansion" test-set design), since the
+    model effectively gets to see a close relative of the test compound during training.
+    Grouping by scaffold before splitting keeps every compound that shares a scaffold on
+    the same side.
+
+    Parameters
+    ----------
+    names : sequence
+        Row identifiers (e.g. compound names), aligned with ``smiles``.
+    smiles : sequence
+        SMILES strings, one per entry in ``names``.
+    test_size : float, default 0.2
+        Target fraction of *compounds* (not scaffold groups) in the test split --
+        ``GroupShuffleSplit`` targets this at the group level, so the realized fraction
+        can differ somewhat from ``test_size`` when scaffold group sizes are uneven.
+    rs : int or None
+        Random state for the group-assignment shuffle.
+
+    Returns
+    -------
+    tuple
+        ``(train_names, test_names)`` -- ``names`` entries assigned to each side.
+    """
+    names = list(names)
+    scaffolds = []
+    for smi in smiles:
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            # Unparseable SMILES can't be scaffold-matched against anything else --
+            # fall back to a group of its own (the raw SMILES string) rather than
+            # raising, so one bad structure doesn't block the whole split.
+            scaffolds.append(smi)
+            continue
+        scaffolds.append(MurckoScaffold.MurckoScaffoldSmiles(mol=mol))
+
+    gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=rs)
+    train_idx, test_idx = next(gss.split(names, groups=scaffolds))
+    return [names[i] for i in train_idx], [names[i] for i in test_idx]
 
 
 def VarianceThreshold_selector(

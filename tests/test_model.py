@@ -821,6 +821,139 @@ def test_modelcmt_same_rs_reproduces_identical_weights(clasmt_train_test):
     assert np.allclose(model1.get_weights()[0], model2.get_weights()[0])
 
 
+def test_interval_loss_zero_inside_bounds_positive_outside():
+    pytest.importorskip("keras")
+    from mlmolprop.model import _interval_loss
+
+    conf_low = np.array([2.0, 3.0])
+    conf_high = np.array([4.0, 5.0])
+    y_true = np.column_stack([conf_low, conf_high]).astype("float32")
+
+    inside = np.array([[3.0], [4.0]], dtype="float32")  # midpoints, well inside each interval
+    assert float(_interval_loss(y_true, inside)) == pytest.approx(0.0)
+
+    above = np.array([[6.0], [7.0]], dtype="float32")  # 2 above each conf_high
+    assert float(_interval_loss(y_true, above)) == pytest.approx((2.0**2 + 2.0**2) / 2)
+
+    below = np.array([[0.0], [1.0]], dtype="float32")  # 2 below each conf_low
+    assert float(_interval_loss(y_true, below)) == pytest.approx((2.0**2 + 2.0**2) / 2)
+
+
+@pytest.mark.slow
+def test_modelmt_y_bounds_actually_trains(regmt_train_test):
+    # Same regression guard as test_modelmt_actually_trains, for the Y_bounds/interval-loss
+    # path: compare against a same-seed fresh (untrained) model, and confirm results_by_task
+    # still reports the usual regression metrics for the real point values.
+    keras = pytest.importorskip("keras")
+    from mlmolprop.model import _build_dl_mt_model
+
+    X_train, Y_train, X_test, Y_test, v_names = regmt_train_test
+    task_names = list(Y_train.columns)
+    # task_a's own point values, widened by +-0.3, stand in for a real credible interval.
+    bounds = {"task_a": (Y_train["task_a"] - 0.3, Y_train["task_a"] + 0.3)}
+
+    keras.utils.set_random_seed(0)
+    fresh_model = _build_dl_mt_model(
+        len(v_names), task_names, hidden_layer_sizes=[8, 4], dropout=0.2,
+        optimizer="adam", learning_rate=0.01, nesterov=True, task="regression",
+        interval_tasks={"task_a"},
+    )
+    fresh_weights = fresh_model.get_weights()[0].copy()
+
+    keras.utils.set_random_seed(0)
+    results_by_task, cv_by_task, fitted_model, analysis_by_task = ModelMT(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0,
+        params={"epochs": 20, "hidden_layer_sizes": [8, 4], "batch_size": 8},
+        Y_bounds=bounds,
+    )
+    trained_weights = fitted_model.get_weights()[0]
+
+    assert not np.allclose(fresh_weights, trained_weights)
+    for t in task_names:
+        assert "R2" in results_by_task[t]
+        assert cv_by_task[t] is not None
+        assert analysis_by_task[t] is not None
+
+
+def test_modelmt_y_bounds_censored_rows_influence_training(regmt_train_test):
+    # The correctness property Y_bounds actually depends on: rows with bounds but no
+    # real Y point value (censored rows) must still contribute to training via the
+    # interval loss -- not be silently ignored just because they're absent from Y itself.
+    keras = pytest.importorskip("keras")
+    X_train, Y_train, X_test, Y_test, v_names = regmt_train_test
+    params = {"epochs": 10, "hidden_layer_sizes": [4], "batch_size": 8}
+
+    conf_low_real = Y_train["task_a"] - 0.3
+    conf_high_real = Y_train["task_a"] + 0.3
+
+    # Version A: bounds cover only the real task_a rows (equivalent to no censoring).
+    keras.utils.set_random_seed(0)
+    _rA, _cvA, modelA, _aA = ModelMT(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params,
+        Y_bounds={"task_a": (conf_low_real, conf_high_real)},
+    )
+
+    # Version B: adds a censored-only bound (conf_high well below the model's likely
+    # predictions) on rows that have no real task_a value at all -- pulls predictions
+    # down there. If censored rows didn't influence training, A and B would train
+    # identically since Y itself is unchanged between them. task_a has no NaN rows of
+    # its own in this fixture, so reuse task_b's already-masked-out slice (~1/3 of the
+    # data) as a stand-in for "rows task_a has no real label for."
+    censored_rows = Y_train["task_b"].isna()
+    conf_low_b = conf_low_real.copy()
+    conf_high_b = conf_high_real.copy()
+    conf_low_b[censored_rows] = -10.0
+    conf_high_b[censored_rows] = -5.0  # forces predictions on these rows well below task_a's real range
+
+    keras.utils.set_random_seed(0)
+    _rB, _cvB, modelB, _aB = ModelMT(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params,
+        Y_bounds={"task_a": (conf_low_b, conf_high_b)},
+    )
+
+    assert not np.allclose(modelA.get_weights()[0], modelB.get_weights()[0])
+
+
+@pytest.mark.slow
+def test_modelmt_task_weights_changes_training(regmt_train_test):
+    keras = pytest.importorskip("keras")
+    X_train, Y_train, X_test, Y_test, v_names = regmt_train_test
+    params = {"epochs": 15, "hidden_layer_sizes": [8, 4], "batch_size": 8}
+
+    keras.utils.set_random_seed(0)
+    _r1, _cv1, model1, _a1 = ModelMT(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params,
+        task_weights={"task_a": 1.0, "task_b": 1.0},
+    )
+    keras.utils.set_random_seed(0)
+    _r2, _cv2, model2, _a2 = ModelMT(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params,
+        task_weights={"task_a": 1.0, "task_b": 0.1},
+    )
+
+    assert not np.allclose(model1.get_weights()[0], model2.get_weights()[0])
+
+
+@pytest.mark.slow
+def test_modelcmt_task_weights_changes_training(clasmt_train_test):
+    keras = pytest.importorskip("keras")
+    X_train, Y_train, X_test, Y_test, v_names = clasmt_train_test
+    params = {"epochs": 15, "hidden_layer_sizes": [8, 4], "batch_size": 8}
+
+    keras.utils.set_random_seed(0)
+    _r1, model1 = ModelCMT(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params,
+        task_weights={"task_a": 1.0, "task_b": 1.0},
+    )
+    keras.utils.set_random_seed(0)
+    _r2, model2 = ModelCMT(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params,
+        task_weights={"task_a": 1.0, "task_b": 0.1},
+    )
+
+    assert not np.allclose(model1.get_weights()[0], model2.get_weights()[0])
+
+
 def test_build_dl_mmoe_model_output_heads_named_per_task():
     pytest.importorskip("keras")
     from mlmolprop.model import _build_dl_mmoe_model

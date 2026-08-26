@@ -787,6 +787,28 @@ def _build_dl_model(
     return model
 
 
+def _interval_loss(y_true, y_pred):
+    """Squared-hinge loss against a ``[conf_low, conf_high]`` interval -- zero when the
+    prediction falls inside the interval, a quadratic penalty outside it.
+
+    Covers both real credible-interval labels and right-censored labels with the same
+    formula: a censored label is just an interval with no meaningful lower bound (the
+    caller sets its ``conf_low`` to a sentinel far below any real value in the data, so
+    the ``under`` term never contributes and only ``conf_high`` constrains training).
+
+    ``y_true`` carries the interval as two columns (``conf_low``, ``conf_high``);
+    ``y_pred`` is the usual single-column prediction. See :func:`ModelMT`'s
+    ``Y_bounds`` parameter for how this gets wired into a real fit.
+    """
+    from keras import ops
+
+    conf_low = y_true[:, 0:1]
+    conf_high = y_true[:, 1:2]
+    over = ops.relu(y_pred - conf_high)
+    under = ops.relu(conf_low - y_pred)
+    return ops.mean(ops.square(over) + ops.square(under))
+
+
 def _build_dl_mt_model(
     n_features,
     task_names,
@@ -798,6 +820,8 @@ def _build_dl_mt_model(
     task="regression",
     l2=0.0,
     rs=None,
+    interval_tasks=None,
+    task_weights=None,
 ):
     """Multitask counterpart of :func:`_build_dl_model`: one shared Dense/Dropout
     trunk (same layer pattern as the single-task builder) feeding one named
@@ -809,6 +833,15 @@ def _build_dl_mt_model(
     ``binary_crossentropy`` for classification -- just applied uniformly to
     every head. See :func:`ModelMT`/:func:`ModelCMT` for how missing per-task
     labels are masked out at fit time via per-output ``sample_weight``.
+
+    ``interval_tasks`` : set[str] or None
+        Regression tasks (``task="regression"`` only, ignored otherwise) that
+        compile with :func:`_interval_loss` instead of plain ``"mse"`` -- see
+        :func:`ModelMT`'s ``Y_bounds`` parameter.
+    ``task_weights`` : dict[str, float] or None
+        Optional per-task loss weight, passed straight to
+        ``model.compile(loss_weights=...)``. ``None`` weights every task equally
+        (Keras's own default).
     """
     try:
         from keras import Model as KerasModel
@@ -827,6 +860,7 @@ def _build_dl_mt_model(
         keras_utils.set_random_seed(rs)
 
     kernel_regularizer = regularizers.l2(l2) if l2 else None
+    interval_tasks = interval_tasks or set()
 
     inputs = Input(shape=(n_features,))
     h = inputs
@@ -842,7 +876,10 @@ def _build_dl_mt_model(
             name: Dense(1, kernel_initializer="normal", activation="linear", name=name)(h)
             for name in task_names
         }
-        loss = {name: "mse" for name in task_names}
+        loss = {
+            name: (_interval_loss if name in interval_tasks else "mse")
+            for name in task_names
+        }
         metrics = {name: ["mae"] for name in task_names}
     else:
         outputs = {
@@ -858,11 +895,14 @@ def _build_dl_mt_model(
         opt = optimizers.SGD(learning_rate=learning_rate, momentum=0.9, nesterov=nesterov)
     else:
         opt = optimizers.Adam(learning_rate=learning_rate)
-    model.compile(loss=loss, optimizer=opt, metrics=metrics)
+    model.compile(loss=loss, optimizer=opt, metrics=metrics, loss_weights=task_weights)
     return model
 
 
-def ModelMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./"):
+def ModelMT(
+    x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./",
+    Y_bounds=None, task_weights=None,
+):
     """Multitask counterpart of :func:`Model`: fit one shared-trunk Keras MLP
     (see :func:`_build_dl_mt_model`), with one linear output head per task,
     jointly across every column of ``Y`` -- rather than one independent
@@ -890,6 +930,23 @@ def ModelMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./
         Whether to report the internal 5-fold CV metrics. Like ``Model()``'s
         ``M="dl"`` path, the internal CV fit always happens regardless of
         ``cv``; ``cv="off"`` only skips reporting it.
+    Y_bounds : dict[str, tuple[pandas.Series, pandas.Series]] or None
+        Optional ``{task: (conf_low, conf_high)}`` for tasks that should train
+        against :func:`_interval_loss` instead of plain MSE -- covers real
+        credible-interval labels and right-censored labels with one mechanism
+        (a censored row's ``conf_low`` is a sentinel far below any real value,
+        set by the caller, so only its upper bound constrains training). Every
+        row a task's ``Y`` column has a real point value for must also have
+        bounds here -- once a task is in ``Y_bounds``, *all* of its training
+        signal (real and censored) routes through the interval loss, not a
+        mix of two mechanisms. Rows with bounds but no ``Y`` point value
+        (censored rows) train the model but are excluded from
+        ``R2``/``Pearson``/etc. reporting below, which has no true value to
+        score them against. Tasks not present in ``Y_bounds`` are completely
+        unaffected -- today's plain-MSE behavior, unchanged.
+    task_weights : dict[str, float] or None
+        Optional per-task loss weight (``model.compile(loss_weights=...)``).
+        ``None`` means uniform weighting -- today's behavior.
 
     Returns
     -------
@@ -915,10 +972,31 @@ def ModelMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./
         **p,
     }
 
+    Y_bounds = Y_bounds or {}
+    interval_tasks = set(Y_bounds)
+
     X_array = np.array(x)
     mask = Y.notna()
     Y_filled = Y.fillna(0.0)
     mask_test = Ytest.notna()
+
+    # Per-task training target/mask: interval-loss tasks train on (conf_low, conf_high)
+    # pairs and are "present" wherever bounds exist (real labels AND censored rows, via
+    # bounds_mask); plain-MSE tasks keep the original point-value/mask pair unchanged.
+    # `mask`/`Y_filled` above stay exactly as before and still drive evaluation (real
+    # point values only) further down -- fit_mask/fit_targets are fit()-only.
+    fit_targets = {}
+    fit_mask = dict(mask)
+    for t in task_names:
+        if t in interval_tasks:
+            conf_low, conf_high = Y_bounds[t]
+            bounds_mask = conf_low.notna() & conf_high.notna()
+            fit_mask[t] = bounds_mask
+            fit_targets[t] = np.column_stack([
+                conf_low.fillna(0.0).to_numpy(), conf_high.fillna(0.0).to_numpy(),
+            ])
+        else:
+            fit_targets[t] = Y_filled[t].to_numpy()
 
     def _build():
         return _build_dl_mt_model(
@@ -926,6 +1004,7 @@ def ModelMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./
             dl_params["hidden_layer_sizes"], dl_params["dropout"],
             dl_params["optimizer"], dl_params["learning_rate"], dl_params["nesterov"],
             task="regression", l2=dl_params["l2"], rs=rs,
+            interval_tasks=interval_tasks, task_weights=task_weights,
         )
 
     ytests_by_task = {t: [] for t in task_names}
@@ -937,14 +1016,14 @@ def ModelMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./
         model2 = _build()
         model2.fit(
             X_train,
-            {t: Y_filled[t].to_numpy()[train_idx] for t in task_names},
-            sample_weight={t: mask[t].to_numpy(dtype=float)[train_idx] for t in task_names},
+            {t: fit_targets[t][train_idx] for t in task_names},
+            sample_weight={t: fit_mask[t].to_numpy(dtype=float)[train_idx] for t in task_names},
             batch_size=dl_params["batch_size"],
             epochs=dl_params["epochs"],
             validation_data=(
                 X_test,
-                {t: Y_filled[t].to_numpy()[test_idx] for t in task_names},
-                {t: mask[t].to_numpy(dtype=float)[test_idx] for t in task_names},
+                {t: fit_targets[t][test_idx] for t in task_names},
+                {t: fit_mask[t].to_numpy(dtype=float)[test_idx] for t in task_names},
             ),
             callbacks=[EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)],
             verbose=0,
@@ -952,6 +1031,9 @@ def ModelMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./
         preds = model2.predict(X_test, verbose=0)
         for t in task_names:
             pred_t = np.ravel(preds[t])
+            # Evaluation/CV metrics always use real point values only (`mask`, not
+            # `fit_mask`) -- censored rows have no true value to score predictions
+            # against, even though they did contribute to training this fold's model.
             keep = mask[t].to_numpy()[test_idx]
             ytests_by_task[t] += list(Y_filled[t].to_numpy()[test_idx][keep])
             ypreds_by_task[t] += list(pred_t[keep])
@@ -959,8 +1041,8 @@ def ModelMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./
     model = _build()
     model.fit(
         X_array,
-        {t: Y_filled[t].to_numpy() for t in task_names},
-        sample_weight={t: mask[t].to_numpy(dtype=float) for t in task_names},
+        {t: fit_targets[t] for t in task_names},
+        sample_weight={t: fit_mask[t].to_numpy(dtype=float) for t in task_names},
         batch_size=dl_params["batch_size"],
         epochs=dl_params["epochs"],
         callbacks=[EarlyStopping(monitor="loss", patience=5, restore_best_weights=True)],
@@ -1785,7 +1867,10 @@ def ModelC(
     return [result, model]
 
 
-def ModelCMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./", plot=False):
+def ModelCMT(
+    x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./",
+    plot=False, task_weights=None,
+):
     """Multitask counterpart of :func:`ModelC`: fit one shared-trunk Keras MLP
     (see :func:`_build_dl_mt_model`), with one sigmoid output head per task,
     jointly across every column of ``Y``.
@@ -1812,6 +1897,11 @@ def ModelCMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path=".
         always-on, since a multitask call has multiple tasks to plot instead
         of ``ModelC()``'s one. Off by default so existing callers/tests are
         unaffected.
+    ``task_weights`` : dict[str, float] or None
+        Optional per-task loss weight (``model.compile(loss_weights=...)``),
+        same as :func:`ModelMT`'s parameter of the same name -- e.g. downweight
+        an auxiliary classification head relative to a track's scored main
+        head(s). ``None`` means uniform weighting -- today's behavior.
 
     Returns
     -------
@@ -1862,6 +1952,7 @@ def ModelCMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path=".
             dl_params["hidden_layer_sizes"], dl_params["dropout"],
             dl_params["optimizer"], dl_params["learning_rate"], dl_params["nesterov"],
             task="classification", l2=dl_params["l2"], rs=rs,
+            task_weights=task_weights,
         )
 
     ytests_by_task = {t: [] for t in task_names}

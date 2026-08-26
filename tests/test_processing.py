@@ -13,6 +13,7 @@ from mlmolprop.processing import (
     file2object,
     list2file,
     object2file,
+    scaffold_split,
 )
 
 
@@ -683,3 +684,38 @@ def test_data_prep_ratio_zero_uses_all_data_for_train_and_test(dataset_csv):
     X_train, y_train, X_test, y_test = result[0], result[1], result[2], result[3]
     assert len(X_train) == len(X_test) == 60
     assert len(y_train) == len(y_test) == 60
+
+
+@pytest.fixture
+def scaffold_smiles():
+    # 4 distinct Bemis-Murcko scaffolds (benzene, pyridine, naphthalene, cyclohexane),
+    # 3 differently-substituted analogs each -- Murcko scaffold extraction strips the
+    # substituent chains, so each trio reduces to the same bare ring scaffold.
+    names = [f"m{i}" for i in range(12)]
+    smiles = [
+        "c1ccccc1C(=O)O", "c1ccccc1C(=O)N", "c1ccccc1CCN",  # benzene scaffold
+        "c1ccncc1C(=O)O", "c1ccncc1C(=O)N", "c1ccncc1CCN",  # pyridine scaffold
+        "c1ccc2ccccc2c1C(=O)O", "c1ccc2ccccc2c1C(=O)N", "c1ccc2ccccc2c1CCN",  # naphthalene
+        "C1CCCCC1C(=O)O", "C1CCCCC1C(=O)N", "C1CCCCC1CCN",  # cyclohexane
+    ]
+    groups = {names[i]: i // 3 for i in range(12)}  # which of the 4 scaffolds each name belongs to
+    return names, smiles, groups
+
+
+def test_scaffold_split_keeps_same_scaffold_together(scaffold_smiles):
+    names, smiles, groups = scaffold_smiles
+    train_names, test_names = scaffold_split(names, smiles, test_size=0.5, rs=0)
+
+    assert set(train_names) | set(test_names) == set(names)
+    assert set(train_names).isdisjoint(test_names)
+
+    train_scaffold_ids = {groups[n] for n in train_names}
+    test_scaffold_ids = {groups[n] for n in test_names}
+    assert train_scaffold_ids.isdisjoint(test_scaffold_ids)
+
+
+def test_scaffold_split_invalid_smiles_does_not_raise():
+    names = ["good1", "good2", "bad"]
+    smiles = ["c1ccccc1C(=O)O", "c1ccccc1CCN", "not-a-smiles"]
+    train_names, test_names = scaffold_split(names, smiles, test_size=0.34, rs=0)
+    assert set(train_names) | set(test_names) == set(names)
