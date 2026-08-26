@@ -11,6 +11,8 @@ import mlmolprop.model as model_module
 from mlmolprop.model import (
     Model,
     ModelC,
+    ModelCMT,
+    ModelMT,
     clus_uns,
     metr,
     plot_confusion_matrix,
@@ -92,6 +94,39 @@ def clas_train_test(rng, cwd_tmp_path):
     score = X["f1"] * 2 - X["f2"]
     y = pd.Series((score > np.median(score)).astype(int))
     return X.iloc[:30], y.iloc[:30], X.iloc[30:], y.iloc[30:], list(X.columns)
+
+
+@pytest.fixture
+def regmt_train_test(feature_frame, rng, cwd_tmp_path):
+    # Two regression tasks sharing one feature matrix, mirroring ModelMT()'s
+    # (shared X, per-task Y column) contract -- task_b has ~1/3 of its rows
+    # masked out (NaN), spanning both the train and test slices below, so
+    # tests actually exercise per-task masking rather than a fully-populated
+    # Y matrix.
+    X = feature_frame[["f1", "f3", "f4"]]
+    task_a = X["f1"] * 2 - X["f3"] + rng.normal(scale=0.1, size=len(X))
+    task_b = X["f4"] * 3 + X["f1"] + rng.normal(scale=0.1, size=len(X))
+    Y = pd.DataFrame({"task_a": task_a, "task_b": task_b}, index=X.index)
+    Y.loc[Y.index[::3], "task_b"] = np.nan
+    return X.iloc[:22], Y.iloc[:22], X.iloc[22:], Y.iloc[22:], list(X.columns)
+
+
+@pytest.fixture
+def clasmt_train_test(rng, cwd_tmp_path):
+    # Two classification tasks sharing one feature matrix, same masking
+    # pattern as regmt_train_test.
+    n = 40
+    X = pd.DataFrame(rng.uniform(0, 1, size=(n, 4)), columns=["f1", "f2", "f3", "f4"])
+    score_a = X["f1"] * 2 - X["f2"]
+    score_b = X["f3"] - X["f4"] * 2
+    Y = pd.DataFrame(
+        {
+            "task_a": (score_a > np.median(score_a)).astype(int),
+            "task_b": (score_b > np.median(score_b)).astype(int),
+        }
+    )
+    Y.loc[Y.index[::3], "task_b"] = np.nan
+    return X.iloc[:30], Y.iloc[:30], X.iloc[30:], Y.iloc[30:], list(X.columns)
 
 
 # Test data is tiny (a handful of rows, 3-4 features), and each model's
@@ -593,6 +628,177 @@ def test_model_dl_missing_keras_raises_informative_error(monkeypatch, reg_train_
 
     with pytest.raises(ImportError, match=r"pip install 'mlmolprop\[dl\]'"):
         Model(X_train, y_train, X_test, y_test, v_names, M="dl", rs=0)
+
+
+def test_build_dl_mt_model_output_heads_named_per_task():
+    pytest.importorskip("keras")
+    from mlmolprop.model import _build_dl_mt_model
+
+    reg_model = _build_dl_mt_model(
+        4, ["task_a", "task_b"], hidden_layer_sizes=[8], dropout=0.2,
+        optimizer="adam", learning_rate=0.01, nesterov=True, task="regression",
+    )
+    assert set(reg_model.output_names) == {"task_a", "task_b"}
+    reg_heads = {layer.name: layer for layer in reg_model.layers if layer.name in ("task_a", "task_b")}
+    assert reg_heads["task_a"].activation.__name__ == "linear"
+    assert reg_heads["task_b"].activation.__name__ == "linear"
+
+    clas_model = _build_dl_mt_model(
+        4, ["task_a", "task_b"], hidden_layer_sizes=[8], dropout=0.2,
+        optimizer="adam", learning_rate=0.01, nesterov=True, task="classification",
+    )
+    clas_heads = {layer.name: layer for layer in clas_model.layers if layer.name in ("task_a", "task_b")}
+    assert clas_heads["task_a"].activation.__name__ == "sigmoid"
+    assert clas_heads["task_b"].activation.__name__ == "sigmoid"
+
+
+@pytest.mark.slow
+def test_modelmt_actually_trains(regmt_train_test):
+    # Same regression guard as test_model_dl_actually_trains, extended to
+    # the multitask builder: compare against a same-seed fresh (untrained)
+    # model rather than an accuracy/R2 threshold.
+    keras = pytest.importorskip("keras")
+    from mlmolprop.model import _build_dl_mt_model
+
+    X_train, Y_train, X_test, Y_test, v_names = regmt_train_test
+    task_names = list(Y_train.columns)
+
+    keras.utils.set_random_seed(0)
+    fresh_model = _build_dl_mt_model(
+        len(v_names), task_names, hidden_layer_sizes=[8, 4], dropout=0.2,
+        optimizer="adam", learning_rate=0.01, nesterov=True, task="regression",
+    )
+    fresh_weights = fresh_model.get_weights()[0].copy()
+
+    keras.utils.set_random_seed(0)
+    results_by_task, cv_by_task, fitted_model, analysis_by_task = ModelMT(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0,
+        params={"epochs": 20, "hidden_layer_sizes": [8, 4], "batch_size": 8},
+    )
+    trained_weights = fitted_model.get_weights()[0]
+
+    assert not np.allclose(fresh_weights, trained_weights)
+    for t in task_names:
+        assert "R2" in results_by_task[t]
+        assert cv_by_task[t] is not None
+        assert analysis_by_task[t] is not None
+
+
+@pytest.mark.slow
+def test_modelcmt_actually_trains(clasmt_train_test):
+    keras = pytest.importorskip("keras")
+    from mlmolprop.model import _build_dl_mt_model
+
+    X_train, Y_train, X_test, Y_test, v_names = clasmt_train_test
+    task_names = list(Y_train.columns)
+
+    keras.utils.set_random_seed(0)
+    fresh_model = _build_dl_mt_model(
+        len(v_names), task_names, hidden_layer_sizes=[8, 4], dropout=0.2,
+        optimizer="adam", learning_rate=0.01, nesterov=True, task="classification",
+    )
+    fresh_weights = fresh_model.get_weights()[0].copy()
+
+    keras.utils.set_random_seed(0)
+    results_by_task, fitted_model = ModelCMT(
+        X_train, Y_train, X_test, Y_test, v_names, rs=0,
+        params={"epochs": 20, "hidden_layer_sizes": [8, 4], "batch_size": 8},
+    )
+    trained_weights = fitted_model.get_weights()[0]
+
+    assert not np.allclose(fresh_weights, trained_weights)
+    for t in task_names:
+        # loose sanity check, same spirit as test_modelc_dl_actually_trains
+        assert results_by_task[t]["test_AC"] >= 0.0
+        assert results_by_task[t]["CV_metrics"] is not None
+
+
+def test_dl_mt_model_sample_weight_zero_ignores_row_value(regmt_train_test):
+    # The correctness property ModelMT()/ModelCMT() actually depend on:
+    # a row with sample_weight=0 must not influence training regardless of
+    # what (dummy) target value it's filled with -- that's what makes
+    # filling missing labels with 0.0 safe instead of requiring NaN-aware
+    # loss machinery. Tested directly against _build_dl_mt_model()/.fit()
+    # (what ModelMT() does internally) rather than through ModelMT()'s own
+    # NaN -> mask translation, since two different *underlying* values at
+    # the same masked position can't be expressed as two NaN-masked Y
+    # DataFrames (both would just be NaN).
+    keras = pytest.importorskip("keras")
+    from mlmolprop.model import _build_dl_mt_model
+
+    X_train, Y_train, _X_test, _Y_test, v_names = regmt_train_test
+    task_names = list(Y_train.columns)
+    X_array = np.array(X_train)
+    mask = Y_train.notna()
+
+    Y_a = Y_train.fillna(0.0)
+    Y_b = Y_train.fillna(0.0)
+    Y_b.loc[~mask["task_b"], "task_b"] = 999.0  # only differs at zero-weighted rows
+
+    build_kwargs = {
+        "hidden_layer_sizes": [4], "dropout": 0.0, "optimizer": "adam",
+        "learning_rate": 0.01, "nesterov": True, "task": "regression",
+    }
+
+    keras.utils.set_random_seed(0)
+    model_a = _build_dl_mt_model(len(v_names), task_names, **build_kwargs)
+    model_a.fit(
+        X_array,
+        {t: Y_a[t].to_numpy() for t in task_names},
+        sample_weight={t: mask[t].to_numpy(dtype=float) for t in task_names},
+        batch_size=8, epochs=10, verbose=0,
+    )
+
+    keras.utils.set_random_seed(0)
+    model_b = _build_dl_mt_model(len(v_names), task_names, **build_kwargs)
+    model_b.fit(
+        X_array,
+        {t: Y_b[t].to_numpy() for t in task_names},
+        sample_weight={t: mask[t].to_numpy(dtype=float) for t in task_names},
+        batch_size=8, epochs=10, verbose=0,
+    )
+
+    assert np.allclose(model_a.get_weights()[0], model_b.get_weights()[0])
+
+
+def test_modelmt_missing_keras_raises_informative_error(monkeypatch, regmt_train_test):
+    X_train, Y_train, X_test, Y_test, v_names = regmt_train_test
+    monkeypatch.setitem(sys.modules, "keras", None)
+
+    with pytest.raises(ImportError, match=r"pip install 'mlmolprop\[dl\]'"):
+        ModelMT(X_train, Y_train, X_test, Y_test, v_names, rs=0)
+
+
+def test_modelcmt_missing_keras_raises_informative_error(monkeypatch, clasmt_train_test):
+    X_train, Y_train, X_test, Y_test, v_names = clasmt_train_test
+    monkeypatch.setitem(sys.modules, "keras", None)
+
+    with pytest.raises(ImportError, match=r"pip install 'mlmolprop\[dl\]'"):
+        ModelCMT(X_train, Y_train, X_test, Y_test, v_names, rs=0)
+
+
+@pytest.mark.slow
+def test_modelmt_same_rs_reproduces_identical_weights(regmt_train_test):
+    pytest.importorskip("keras")
+    X_train, Y_train, X_test, Y_test, v_names = regmt_train_test
+    params = {"epochs": 15, "hidden_layer_sizes": [8, 4], "batch_size": 8}
+
+    _r1, _cv1, model1, _a1 = ModelMT(X_train, Y_train, X_test, Y_test, v_names, rs=7, params=params)
+    _r2, _cv2, model2, _a2 = ModelMT(X_train, Y_train, X_test, Y_test, v_names, rs=7, params=params)
+
+    assert np.allclose(model1.get_weights()[0], model2.get_weights()[0])
+
+
+@pytest.mark.slow
+def test_modelcmt_same_rs_reproduces_identical_weights(clasmt_train_test):
+    pytest.importorskip("keras")
+    X_train, Y_train, X_test, Y_test, v_names = clasmt_train_test
+    params = {"epochs": 15, "hidden_layer_sizes": [8, 4], "batch_size": 8}
+
+    _r1, model1 = ModelCMT(X_train, Y_train, X_test, Y_test, v_names, rs=7, params=params)
+    _r2, model2 = ModelCMT(X_train, Y_train, X_test, Y_test, v_names, rs=7, params=params)
+
+    assert np.allclose(model1.get_weights()[0], model2.get_weights()[0])
 
 
 def test_model_xgb_missing_xgboost_raises_informative_error(monkeypatch, reg_train_test):

@@ -787,6 +787,246 @@ def _build_dl_model(
     return model
 
 
+def _build_dl_mt_model(
+    n_features,
+    task_names,
+    hidden_layer_sizes,
+    dropout,
+    optimizer,
+    learning_rate,
+    nesterov,
+    task="regression",
+    l2=0.0,
+    rs=None,
+):
+    """Multitask counterpart of :func:`_build_dl_model`: one shared Dense/Dropout
+    trunk (same layer pattern as the single-task builder) feeding one named
+    ``Dense(1)`` output head per entry in ``task_names``, via the Functional
+    API rather than ``Sequential`` (needed for multiple named outputs).
+
+    Per-task loss/metrics are chosen the same way ``_build_dl_model`` already
+    splits by ``task`` -- linear/``mse`` for regression, sigmoid/
+    ``binary_crossentropy`` for classification -- just applied uniformly to
+    every head. See :func:`ModelMT`/:func:`ModelCMT` for how missing per-task
+    labels are masked out at fit time via per-output ``sample_weight``.
+    """
+    try:
+        from keras import Model as KerasModel
+        from keras import optimizers, regularizers
+        from keras import utils as keras_utils
+        from keras.layers import Dense, Dropout, Input
+    except ImportError as e:
+        raise ImportError(
+            "ModelMT()/ModelCMT() require the optional 'dl' extra (keras plus "
+            "the PyTorch backend engine). Install with: pip install "
+            "'mlmolprop[dl]', and set the environment variable "
+            "KERAS_BACKEND=torch before running."
+        ) from e
+
+    if rs is not None:
+        keras_utils.set_random_seed(rs)
+
+    kernel_regularizer = regularizers.l2(l2) if l2 else None
+
+    inputs = Input(shape=(n_features,))
+    h = inputs
+    for units in hidden_layer_sizes:
+        h = Dense(
+            units, kernel_initializer="uniform", activation="relu",
+            kernel_regularizer=kernel_regularizer,
+        )(h)
+        h = Dropout(dropout)(h)
+
+    if task == "regression":
+        outputs = {
+            name: Dense(1, kernel_initializer="normal", activation="linear", name=name)(h)
+            for name in task_names
+        }
+        loss = {name: "mse" for name in task_names}
+        metrics = {name: ["mae"] for name in task_names}
+    else:
+        outputs = {
+            name: Dense(1, kernel_initializer="normal", activation="sigmoid", name=name)(h)
+            for name in task_names
+        }
+        loss = {name: "binary_crossentropy" for name in task_names}
+        metrics = {name: ["accuracy"] for name in task_names}
+
+    model = KerasModel(inputs=inputs, outputs=outputs)
+
+    if optimizer == "sgd":
+        opt = optimizers.SGD(learning_rate=learning_rate, momentum=0.9, nesterov=nesterov)
+    else:
+        opt = optimizers.Adam(learning_rate=learning_rate)
+    model.compile(loss=loss, optimizer=opt, metrics=metrics)
+    return model
+
+
+def ModelMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./"):
+    """Multitask counterpart of :func:`Model`: fit one shared-trunk Keras MLP
+    (see :func:`_build_dl_mt_model`), with one linear output head per task,
+    jointly across every column of ``Y`` -- rather than one independent
+    ``Model(M="dl")`` call per task.
+
+    Parameters
+    ----------
+    x, xtest : shared feature matrix (train/test). Every task in ``Y`` is
+        trained against the *same* input representation -- a shared trunk
+        needs one common input space, so (unlike the per-task feature
+        selection ``Model()`` is usually paired with) this expects a
+        task-agnostic feature set as input.
+    Y, Ytest : DataFrame, one column per task, ``NaN`` where that task's
+        label is missing for a given row. Masking missing labels is not
+        optional here -- most rows are missing most tasks.
+    v_names : list[str]
+        Feature names (for the per-task ``analyse()``/``F()`` calls).
+    params : dict or None
+        Same recognized keys as ``Model()``'s ``M="dl"`` (``epochs``,
+        ``hidden_layer_sizes``, ``learning_rate``, ``nesterov``,
+        ``optimizer``, ``dropout``, ``l2``, ``batch_size``) -- one shared
+        config for every task's output head, since this is a shared-bottom
+        model, not per-task tuning.
+    cv : {"kf", "off"}
+        Whether to report the internal 5-fold CV metrics. Like ``Model()``'s
+        ``M="dl"`` path, the internal CV fit always happens regardless of
+        ``cv``; ``cv="off"`` only skips reporting it.
+
+    Returns
+    -------
+    tuple
+        ``(results_by_task, List_by_task, model, analysis_by_task)`` --
+        three dicts keyed by task name (each task's entry shaped like
+        ``Model()``'s own ``result``/``List``/``analysis``), plus the single
+        fitted multitask model shared by every task.
+    """
+    from keras.callbacks import EarlyStopping
+
+    task_names = list(Y.columns)
+    p = dict(params or {})
+    dl_params = {
+        "epochs": 300,
+        "hidden_layer_sizes": (500, 1000),
+        "learning_rate": 0.01,
+        "nesterov": True,
+        "optimizer": "adam",
+        "dropout": 0.2,
+        "batch_size": 16,
+        "l2": 0.0,
+        **p,
+    }
+
+    X_array = np.array(x)
+    mask = Y.notna()
+    Y_filled = Y.fillna(0.0)
+    mask_test = Ytest.notna()
+
+    def _build():
+        return _build_dl_mt_model(
+            len(v_names), task_names,
+            dl_params["hidden_layer_sizes"], dl_params["dropout"],
+            dl_params["optimizer"], dl_params["learning_rate"], dl_params["nesterov"],
+            task="regression", l2=dl_params["l2"], rs=rs,
+        )
+
+    ytests_by_task = {t: [] for t in task_names}
+    ypreds_by_task = {t: [] for t in task_names}
+
+    loo = KFold(n_splits=5, shuffle=True, random_state=rs)
+    for train_idx, test_idx in loo.split(X_array):
+        X_train, X_test = X_array[train_idx], X_array[test_idx]
+        model2 = _build()
+        model2.fit(
+            X_train,
+            {t: Y_filled[t].to_numpy()[train_idx] for t in task_names},
+            sample_weight={t: mask[t].to_numpy(dtype=float)[train_idx] for t in task_names},
+            batch_size=dl_params["batch_size"],
+            epochs=dl_params["epochs"],
+            validation_data=(
+                X_test,
+                {t: Y_filled[t].to_numpy()[test_idx] for t in task_names},
+                {t: mask[t].to_numpy(dtype=float)[test_idx] for t in task_names},
+            ),
+            callbacks=[EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)],
+            verbose=0,
+        )
+        preds = model2.predict(X_test, verbose=0)
+        for t in task_names:
+            pred_t = np.ravel(preds[t])
+            keep = mask[t].to_numpy()[test_idx]
+            ytests_by_task[t] += list(Y_filled[t].to_numpy()[test_idx][keep])
+            ypreds_by_task[t] += list(pred_t[keep])
+
+    model = _build()
+    model.fit(
+        X_array,
+        {t: Y_filled[t].to_numpy() for t in task_names},
+        sample_weight={t: mask[t].to_numpy(dtype=float) for t in task_names},
+        batch_size=dl_params["batch_size"],
+        epochs=dl_params["epochs"],
+        callbacks=[EarlyStopping(monitor="loss", patience=5, restore_best_weights=True)],
+        verbose=0,
+    )
+
+    y_predict_train_by_task = model.predict(X_array, verbose=0)
+    y_predict_test_by_task = model.predict(np.array(xtest), verbose=0)
+
+    results_by_task = {}
+    List_by_task = {} if cv != "off" else None
+    analysis_by_task = {} if cv != "off" else None
+
+    for t in task_names:
+        train_keep = mask[t].to_numpy()
+        test_keep = mask_test[t].to_numpy()
+
+        y_train_t = Y[t].to_numpy()[train_keep]
+        y_pred_train_t = np.ravel(y_predict_train_by_task[t])[train_keep]
+        y_test_t = Ytest[t].to_numpy()[test_keep]
+        y_pred_test_t = np.ravel(y_predict_test_by_task[t])[test_keep]
+
+        R2 = q2r2(y_train_t, y_pred_train_t)
+        R2test = r2test(y_test_t, y_pred_test_t, y_train_t)
+        Pearson = stats.pearsonr(y_test_t, y_pred_test_t)
+        model_mse_test = mean_squared_error(y_pred_test_t, y_test_t)
+        try:
+            f = F(y_train_t, y_pred_train_t, k=len(v_names))
+        except ValueError:
+            f = float("nan")
+
+        results_by_task[t] = {
+            "R2": R2,
+            "Mean_squared_error_test": model_mse_test,
+            "R2_test": R2test,
+            "F": f,
+            "Variable Importance": "",
+            "Pearson": Pearson,
+        }
+
+        # A task's own accumulated CV rows can, in principle, come up empty
+        # (every fold's held-out slice happened to miss that task's sparse
+        # labels) -- guard rather than let RMSEP_CV_C's n=0 raise.
+        if cv != "off" and ytests_by_task[t]:
+            q2 = q2r2(ytests_by_task[t], ypreds_by_task[t])
+            rmse = RMSEP_CV_C(ytests_by_task[t], ypreds_by_task[t])
+            q2f2 = r2test(y_test_t, y_pred_test_t, y_test_t)
+            List_by_task[t] = {"q2": q2, "RMSECV": rmse, "Q2F2": q2f2}
+            analysis_by_task[t] = analyse(
+                y_train_t, y_pred_train_t, y_test_t, y_pred_test_t,
+                ytests_by_task[t], ypreds_by_task[t], k=len(v_names),
+            )
+        elif cv != "off":
+            List_by_task[t] = None
+            analysis_by_task[t] = None
+
+        y1 = pd.DataFrame(y_train_t, index=x.index[train_keep], columns=["observed"])
+        y2 = pd.DataFrame(y_pred_train_t, index=x.index[train_keep], columns=["predicted"])
+        pd.concat([y1, y2], axis=1).to_csv(f"{path}{t}_train.csv")
+        y4 = pd.DataFrame(y_test_t, index=xtest.index[test_keep], columns=["observed"])
+        y5 = pd.DataFrame(y_pred_test_t, index=xtest.index[test_keep], columns=["predicted"])
+        pd.concat([y4, y5], axis=1).to_csv(f"{path}{t}_test.csv")
+
+    return results_by_task, List_by_task, model, analysis_by_task
+
+
 def ModelC(
     x,
     y,
@@ -1312,6 +1552,166 @@ def ModelC(
         "total_MCC": total["MCC"],
     }
     return [result, model]
+
+
+def ModelCMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./"):
+    """Multitask counterpart of :func:`ModelC`: fit one shared-trunk Keras MLP
+    (see :func:`_build_dl_mt_model`), with one sigmoid output head per task,
+    jointly across every column of ``Y``.
+
+    Same shared-``x``/masked-``Y`` contract as :func:`ModelMT` -- see its
+    docstring. Each task's ``sample_weight`` folds in both label-presence
+    masking and "balanced" class weighting computed from that task's own
+    non-missing labels, since Keras's per-``fit()`` ``class_weight`` argument
+    (used by ``ModelC()``'s single-task ``M="dl"`` path) has no per-output
+    equivalent for a multi-output model -- same "class_weight-as-
+    sample_weight" pattern this module already uses for ``M="gb"``/``M="xgb"``
+    in ``ModelC()``.
+
+    Internal CV uses a plain ``KFold`` split rather than ``ModelC()``'s
+    ``StratifiedKFold`` -- joint stratification across ``len(task_names)``
+    independently-missing binary tasks isn't well-defined for one shared
+    split.
+
+    Unlike ``ModelC()``, this does not produce confusion-matrix plots (that
+    would be 3 figures per task per call) -- only the numeric metrics.
+
+    Returns
+    -------
+    tuple
+        ``(results_by_task, model)`` -- a dict keyed by task name (each
+        task's entry restricted to the same ``train_*``/``test_*``/
+        ``CV_metrics`` keys ``ModelC()``'s own ``result`` already has), plus
+        the single fitted multitask model.
+    """
+    from keras.callbacks import EarlyStopping
+    from sklearn.utils.class_weight import compute_class_weight
+
+    task_names = list(Y.columns)
+    p = dict(params or {})
+    dl_params = {
+        "epochs": 300,
+        "hidden_layer_sizes": (500, 1000),
+        "learning_rate": 0.01,
+        "nesterov": True,
+        "optimizer": "adam",
+        "dropout": 0.2,
+        "batch_size": 16,
+        "l2": 0.0,
+        **p,
+    }
+
+    X_array = np.array(x)
+    mask = Y.notna()
+    Y_filled = Y.fillna(0).astype(int)
+    mask_test = Ytest.notna()
+    Ytest_filled = Ytest.fillna(0).astype(int)
+
+    # Computed once from the full training Y, then sliced per CV fold below --
+    # rows where a task's label is missing get weight 0 regardless of their
+    # (dummy) filled label, so per-fold class balance doesn't need
+    # recomputing from each fold's own (already-masked) subset.
+    sample_weight_full = {}
+    for t in task_names:
+        labels_present = Y.loc[mask[t], t].to_numpy()
+        cw = dict(enumerate(compute_class_weight("balanced", classes=np.array([0, 1]), y=labels_present)))
+        labels = Y_filled[t].to_numpy()
+        weights = np.where(labels == 1, cw[1], cw[0]).astype(float)
+        sample_weight_full[t] = weights * mask[t].to_numpy(dtype=float)
+
+    def _build():
+        return _build_dl_mt_model(
+            len(v_names), task_names,
+            dl_params["hidden_layer_sizes"], dl_params["dropout"],
+            dl_params["optimizer"], dl_params["learning_rate"], dl_params["nesterov"],
+            task="classification", l2=dl_params["l2"], rs=rs,
+        )
+
+    ytests_by_task = {t: [] for t in task_names}
+    ypreds_by_task = {t: [] for t in task_names}
+
+    loo = KFold(n_splits=5, shuffle=True, random_state=rs)
+    for train_idx, test_idx in loo.split(X_array):
+        X_train, X_test = X_array[train_idx], X_array[test_idx]
+        model2 = _build()
+        model2.fit(
+            X_train,
+            {t: Y_filled[t].to_numpy()[train_idx] for t in task_names},
+            sample_weight={t: sample_weight_full[t][train_idx] for t in task_names},
+            batch_size=dl_params["batch_size"],
+            epochs=dl_params["epochs"],
+            validation_data=(
+                X_test,
+                {t: Y_filled[t].to_numpy()[test_idx] for t in task_names},
+                {t: sample_weight_full[t][test_idx] for t in task_names},
+            ),
+            callbacks=[EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)],
+            verbose=0,
+        )
+        preds = model2.predict(X_test, verbose=0)
+        for t in task_names:
+            pred_t = (np.ravel(preds[t]) > 0.5).astype(int)
+            keep = mask[t].to_numpy()[test_idx]
+            ytests_by_task[t] += list(Y_filled[t].to_numpy()[test_idx][keep])
+            ypreds_by_task[t] += list(pred_t[keep])
+
+    model = _build()
+    model.fit(
+        X_array,
+        {t: Y_filled[t].to_numpy() for t in task_names},
+        sample_weight=sample_weight_full,
+        batch_size=dl_params["batch_size"],
+        epochs=dl_params["epochs"],
+        callbacks=[EarlyStopping(monitor="loss", patience=5, restore_best_weights=True)],
+        verbose=0,
+    )
+
+    y_predict_train_by_task = model.predict(X_array, verbose=0)
+    y_predict_test_by_task = model.predict(np.array(xtest), verbose=0)
+
+    results_by_task = {}
+    for t in task_names:
+        train_keep = mask[t].to_numpy()
+        test_keep = mask_test[t].to_numpy()
+
+        y_train_t = Y_filled[t].to_numpy()[train_keep]
+        pred_train_t = (np.ravel(y_predict_train_by_task[t]) > 0.5).astype(int)[train_keep]
+        y_test_t = Ytest_filled[t].to_numpy()[test_keep]
+        pred_test_t = (np.ravel(y_predict_test_by_task[t]) > 0.5).astype(int)[test_keep]
+
+        cnf = confusion_matrix(y_train_t, pred_train_t, labels=[0, 1])
+        cnf2 = confusion_matrix(y_test_t, pred_test_t, labels=[0, 1])
+        tn, fp, fn, tp = cnf.ravel()
+        tnt, fpt, fnt, tpt = cnf2.ravel()
+        trainmetrics = metr(tp, tn, fp, fn)
+        testmetrics = metr(tpt, tnt, fpt, fnt)
+
+        # Same empty-fold guard as ModelMT() -- a sparsely-labeled task can,
+        # in principle, end up with zero accumulated CV rows.
+        if cv != "off" and ytests_by_task[t]:
+            cnf3 = confusion_matrix(ytests_by_task[t], ypreds_by_task[t], labels=[0, 1])
+            tnc, fpc, fnc, tpc = cnf3.ravel()
+            cvmetrics = metr(tpc, tnc, fpc, fnc)
+        else:
+            cvmetrics = None
+
+        results_by_task[t] = {
+            "train_AC": trainmetrics["AC"],
+            "train_SEN": trainmetrics["SEN"],
+            "train_SPEC": trainmetrics["SPEC"],
+            "train_PREC": trainmetrics["PREC"],
+            "train_F": trainmetrics["F"],
+            "train_MCC": trainmetrics["MCC"],
+            "test_AC": testmetrics["AC"],
+            "test_SEN": testmetrics["SEN"],
+            "test_SPEC": testmetrics["SPEC"],
+            "test_PREC": testmetrics["PREC"],
+            "test_F": testmetrics["F"],
+            "test_MCC": testmetrics["MCC"],
+            "CV_metrics": cvmetrics,
+        }
+
+    return results_by_task, model
 
 
 def plot_confusion_matrix(
