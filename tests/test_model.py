@@ -713,6 +713,24 @@ def test_modelcmt_actually_trains(clasmt_train_test):
         assert results_by_task[t]["CV_metrics"] is not None
 
 
+def test_modelcmt_plot_true_creates_figures_per_task(clasmt_train_test):
+    pytest.importorskip("keras")
+    import matplotlib.pyplot as plt
+
+    X_train, Y_train, X_test, Y_test, v_names = clasmt_train_test
+    task_names = list(Y_train.columns)
+    params = {"epochs": 5, "hidden_layer_sizes": [4], "batch_size": 8}
+
+    plt.close("all")
+    ModelCMT(X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params, plot=True)
+    # train + CV + test, one set of 3 figures per task
+    assert len(plt.get_fignums()) == 3 * len(task_names)
+    plt.close("all")
+
+    ModelCMT(X_train, Y_train, X_test, Y_test, v_names, rs=0, params=params)
+    assert len(plt.get_fignums()) == 0  # plot=False (default): no figures
+
+
 def test_dl_mt_model_sample_weight_zero_ignores_row_value(regmt_train_test):
     # The correctness property ModelMT()/ModelCMT() actually depend on:
     # a row with sample_weight=0 must not influence training regardless of

@@ -1554,7 +1554,7 @@ def ModelC(
     return [result, model]
 
 
-def ModelCMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./"):
+def ModelCMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="./", plot=False):
     """Multitask counterpart of :func:`ModelC`: fit one shared-trunk Keras MLP
     (see :func:`_build_dl_mt_model`), with one sigmoid output head per task,
     jointly across every column of ``Y``.
@@ -1573,8 +1573,14 @@ def ModelCMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path=".
     independently-missing binary tasks isn't well-defined for one shared
     split.
 
-    Unlike ``ModelC()``, this does not produce confusion-matrix plots (that
-    would be 3 figures per task per call) -- only the numeric metrics.
+    ``plot`` : bool, default False
+        If True, draw train/CV/test confusion-matrix figures per task (3 x
+        ``len(task_names)`` figures) via :func:`plot_confusion_matrix`, same
+        layout and TP/TN/FN/FP display convention as ``ModelC()``'s own
+        plots -- just titled per task and gated behind this flag rather than
+        always-on, since a multitask call has multiple tasks to plot instead
+        of ``ModelC()``'s one. Off by default so existing callers/tests are
+        unaffected.
 
     Returns
     -------
@@ -1688,12 +1694,34 @@ def ModelCMT(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path=".
 
         # Same empty-fold guard as ModelMT() -- a sparsely-labeled task can,
         # in principle, end up with zero accumulated CV rows.
+        cv_panel = None
         if cv != "off" and ytests_by_task[t]:
             cnf3 = confusion_matrix(ytests_by_task[t], ypreds_by_task[t], labels=[0, 1])
             tnc, fpc, fnc, tpc = cnf3.ravel()
             cvmetrics = metr(tpc, tnc, fpc, fnc)
+            cv_panel = (cnf3.copy(), tpc, tnc, fnc, fpc, f"{t} -- Cross-Validation")
         else:
             cvmetrics = None
+
+        if plot:
+            # Same TP/TN/FN/FP display reorder ModelC() applies before plotting (its own
+            # tn/fp/fn/tp unpack above is metr()'s input order, not the plotted layout) --
+            # [0][0]/[1][1] are TP/TN, [0][1]/[1][0] are FN/FP, so "Active" (label 1) shows
+            # top-left instead of sklearn's default TN-top-left layout.
+            panels = [
+                (cnf.copy(), tp, tn, fn, fp, f"{t} -- Train set"),
+                (cnf2.copy(), tpt, tnt, fnt, fpt, f"{t} -- Test set"),
+            ]
+            if cv_panel is not None:
+                panels.append(cv_panel)
+            for panel_cnf, panel_tp, panel_tn, panel_fn, panel_fp, title in panels:
+                panel_cnf[0][0], panel_cnf[1][1] = panel_tp, panel_tn
+                panel_cnf[0][1], panel_cnf[1][0] = panel_fn, panel_fp
+                plt.figure(figsize=(8, 7))
+                plot_confusion_matrix(panel_cnf, classes=["Active", "Inactive"], title=title)
+                plt.ylabel("Actual", fontsize=24, fontweight="bold")
+                plt.xlabel("Predicted", fontsize=24, fontweight="bold")
+                plt.tight_layout()
 
         results_by_task[t] = {
             "train_AC": trainmetrics["AC"],
