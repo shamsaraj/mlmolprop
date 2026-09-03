@@ -979,7 +979,15 @@ def ModelMT(
         ``Model()``'s own ``result``/``List``/``analysis``), plus the single
         fitted multitask model shared by every task.
     """
-    from keras.callbacks import EarlyStopping
+    try:
+        from keras.callbacks import EarlyStopping
+    except ImportError as e:
+        raise ImportError(
+            "ModelMT()/ModelCMT() require the optional 'dl' extra (keras plus "
+            "the PyTorch backend engine). Install with: pip install "
+            "'mlmolprop[dl]', and set the environment variable "
+            "KERAS_BACKEND=torch before running."
+        ) from e
 
     task_names = list(Y.columns)
     p = dict(params or {})
@@ -1255,7 +1263,15 @@ def ModelMMoE(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="
         ``(results_by_task, List_by_task, model, analysis_by_task)`` -- same
         shape as :func:`ModelMT`'s return.
     """
-    from keras.callbacks import EarlyStopping
+    try:
+        from keras.callbacks import EarlyStopping
+    except ImportError as e:
+        raise ImportError(
+            "ModelMMoE()/ModelCMMoE() require the optional 'dl' extra (keras plus "
+            "the PyTorch backend engine). Install with: pip install "
+            "'mlmolprop[dl]', and set the environment variable "
+            "KERAS_BACKEND=torch before running."
+        ) from e
 
     task_names = list(Y.columns)
     p = dict(params or {})
@@ -1954,7 +1970,15 @@ def ModelCMT(
         ``CV_metrics`` keys ``ModelC()``'s own ``result`` already has), plus
         the single fitted multitask model.
     """
-    from keras.callbacks import EarlyStopping
+    try:
+        from keras.callbacks import EarlyStopping
+    except ImportError as e:
+        raise ImportError(
+            "ModelMT()/ModelCMT() require the optional 'dl' extra (keras plus "
+            "the PyTorch backend engine). Install with: pip install "
+            "'mlmolprop[dl]', and set the environment variable "
+            "KERAS_BACKEND=torch before running."
+        ) from e
     from sklearn.utils.class_weight import compute_class_weight
 
     task_names = list(Y.columns)
@@ -2123,7 +2147,15 @@ def ModelCMMoE(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path=
     tuple
         ``(results_by_task, model)`` -- same shape as :func:`ModelCMT`'s return.
     """
-    from keras.callbacks import EarlyStopping
+    try:
+        from keras.callbacks import EarlyStopping
+    except ImportError as e:
+        raise ImportError(
+            "ModelMMoE()/ModelCMMoE() require the optional 'dl' extra (keras plus "
+            "the PyTorch backend engine). Install with: pip install "
+            "'mlmolprop[dl]', and set the environment variable "
+            "KERAS_BACKEND=torch before running."
+        ) from e
     from sklearn.utils.class_weight import compute_class_weight
 
     task_names = list(Y.columns)
