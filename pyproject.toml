@@ -10,8 +10,24 @@ authors = [
 ]
 description = "Machine learning and cheminformatics toolkit for molecular modeling."
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
+keywords = [
+  "cheminformatics", "qsar", "molecular-descriptors", "fingerprints",
+  "rdkit", "machine-learning", "drug-discovery",
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Chemistry",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: OS Independent",
+]
 dependencies = [
   # Lower bounds are the versions this was actually tested against
   # (see environment.yml); no upper bounds unless a real incompatibility
@@ -64,6 +80,11 @@ all = ["mlmolprop[dl,torch,image,xgboost]"]
 [project.urls]
 "Homepage" = "https://github.com/shamsaraj/mlmolprop"
 "Bug Tracker" = "https://github.com/shamsaraj/mlmolprop/issues"
+
+[tool.hatch.build.targets.sdist]
+# Ship the package, its tests and the quickstart; leave development notes and
+# the CI config out of the distribution.
+exclude = ["CLAUDE.md", ".github", ".gitignore"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mlmolprop"]

@@ -99,9 +99,9 @@ print(model_result[0])  # metrics dict
 
 ## Example Notebook
 
-[`examples/quickstart.ipynb`](examples/quickstart.ipynb) runs the full pipeline
+[`examples/quickstart.ipynb`](https://github.com/shamsaraj/mlmolprop/blob/main/examples/quickstart.ipynb) runs the full pipeline
 above end-to-end against
-[`examples/data/esol_subset.csv`](examples/data/esol_subset.csv), a
+[`examples/data/esol_subset.csv`](https://github.com/shamsaraj/mlmolprop/blob/main/examples/data/esol_subset.csv), a
 70-compound sample of the real, measured **ESOL/Delaney aqueous solubility
 dataset**, then goes further:
 
@@ -162,4 +162,4 @@ dev tools are included in `environment.yml`).
 
 ## License
 
-This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **MIT License** — see the [LICENSE](https://github.com/shamsaraj/mlmolprop/blob/main/LICENSE) file for details.
