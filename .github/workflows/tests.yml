@@ -82,7 +82,7 @@ jobs:
           pip install \
             "numpy==2.0.*" "pandas==2.2.*" "scikit-learn==1.5.*" \
             "scipy==1.13.*" "rdkit==2024.3.*" "matplotlib==3.9.*" \
-            "reportlab" "svglib" "lime" "pytest" "keras" "torch"
+            "reportlab" "svglib" "lime" "pytest" "keras" "torch" "xgboost"
 
       - name: Install mlmolprop without touching the pins
         # --no-deps keeps the pinned set intact; --ignore-requires-python lets
