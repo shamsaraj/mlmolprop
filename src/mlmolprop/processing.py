@@ -68,10 +68,15 @@ def data_prep(
     univariate feature selection, plus an applicability-domain (CI)
     report. The split happens *before* any of those toggleable steps, and
     each one is fit on the training rows only and applied transform-only
-    to the test rows -- so no feature- or target-derived statistic (a
-    variance, a mean/std, a correlation, an F-test score, ...) is ever
-    computed using information from the test set. The prepared
-    ``(X, y, ...)`` tuple is also pickled to ``output`` for later reuse.
+    to the test rows -- so none of *their* statistics (a variance, a
+    mean/std, a correlation, an F-test score, ...) is computed from test
+    rows. Imputation is the exception: it runs before the split, so its
+    column means are taken over the whole input. It is treated as dataset
+    curation rather than as part of the fitted pipeline -- and, unlike the
+    scalers, the fitted imputer is not returned, so it is not re-applied
+    under ``newset="on"``. Pre-impute new compounds yourself if they may
+    have missing values. The prepared ``(X, y, ...)`` tuple is also
+    pickled to ``output`` for later reuse.
 
     The input dataset is given one of two ways:
 
