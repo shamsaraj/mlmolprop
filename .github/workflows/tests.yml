@@ -61,14 +61,12 @@ jobs:
       - name: Smoke test
         run: python -c "import mlmolprop; print(mlmolprop.__version__)"
 
-  # EXPERIMENT: does the code actually work below the declared floors, or are
-  # those floors just "what my dev machine had"? Installs a deliberately older
-  # pinned set and runs the same suite. continue-on-error so a failure reports
-  # the answer without turning main red. If this passes, the floors in
-  # pyproject.toml can come down and be backed by CI rather than by assumption.
-  pytest-floor-candidate:
+  # Runs the suite against the oldest dependency set pyproject.toml claims to
+  # support, so the declared floors stay a proven claim rather than drifting
+  # back to whatever the dev environment happens to have. Keep these pins and
+  # the floors in pyproject.toml in step: if one moves, move the other.
+  pytest-oldest-supported:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 
@@ -76,7 +74,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install a candidate floor set
+      - name: Install the oldest supported dependency set
         run: |
           python -m pip install --upgrade pip
           pip install \
