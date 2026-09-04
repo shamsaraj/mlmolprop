@@ -12,7 +12,7 @@ description = "Machine learning and cheminformatics toolkit for molecular modeli
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 keywords = [
   "cheminformatics", "qsar", "molecular-descriptors", "fingerprints",
   "rdkit", "machine-learning", "drug-discovery",
@@ -24,20 +24,24 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Scientific/Engineering :: Bio-Informatics",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Operating System :: OS Independent",
 ]
 dependencies = [
-  # Lower bounds are the versions this was actually tested against
-  # (see environment.yml); no upper bounds unless a real incompatibility
-  # is found, so this doesn't fight other packages' version requirements.
-  "numpy>=2.5",
-  "pandas>=3.0",
-  "matplotlib>=3.10",
-  "scikit-learn>=1.9",
-  "scipy>=1.18",
-  "rdkit>=2025.9.3",
+  # Lower bounds are proven, not assumed: the pytest-oldest-supported CI job
+  # runs the full suite against exactly these versions on every push. They are
+  # deliberately well below environment.yml, which is the development
+  # environment and tracks current releases. No upper bounds unless a real
+  # incompatibility is found, so this doesn't fight other packages'
+  # requirements.
+  "numpy>=2.0",
+  "pandas>=2.2",
+  "matplotlib>=3.9",
+  "scikit-learn>=1.5",
+  "scipy>=1.13",
+  "rdkit>=2024.3",
   "reportlab>=5.0",
   "svglib>=2.1",
   "lime>=0.2",

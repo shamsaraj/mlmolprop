@@ -1765,11 +1765,14 @@ def ModelC(
         # which needs a scorer/held-out data, not just the fitted model.
         VI = ""
     elif M == "rg":
-        # Unlike the other linear classifiers here, RidgeClassifier's
-        # coef_ for binary classification is already 1D (n_features,),
-        # not (1, n_features) -- indexing [0] would grab a single
-        # coefficient instead of the whole vector.
-        VI = model.coef_
+        # RidgeClassifier's binary coef_ is 1D (n_features,) on scikit-learn
+        # >= ~1.9 but (1, n_features) on older releases, so neither a bare
+        # `coef_` nor `coef_[0]` is right on both -- the first grabs a
+        # (1, n) frame on old sklearn, the second a single coefficient on
+        # new. Branch on ndim instead, which also keeps the multiclass
+        # (n_classes, n_features) case taking the first class like the
+        # other linear classifiers below.
+        VI = model.coef_ if model.coef_.ndim == 1 else model.coef_[0]
     else:
         VI = model.coef_[0]
 
