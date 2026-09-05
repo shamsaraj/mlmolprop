@@ -1,5 +1,10 @@
 # mlmolprop — Cheminformatics & QSAR Modeling Toolkit
 
+[![PyPI](https://img.shields.io/pypi/v/mlmolprop)](https://pypi.org/project/mlmolprop/)
+[![Python](https://img.shields.io/pypi/pyversions/mlmolprop)](https://pypi.org/project/mlmolprop/)
+[![Tests](https://github.com/shamsaraj/mlmolprop/actions/workflows/tests.yml/badge.svg)](https://github.com/shamsaraj/mlmolprop/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/shamsaraj/mlmolprop/blob/main/LICENSE)
+
 **mlmolprop** is a modular Python framework for cheminformatics and QSAR (Quantitative Structure–Activity Relationship) modeling.
 It enables molecular descriptor generation, fingerprint computation, dataset preprocessing, feature selection, and machine learning analysis — all within one workflow.
 
@@ -26,20 +31,34 @@ This toolkit integrates **RDKit**, **scikit-learn**, **Keras/PyTorch**, **LIME**
 
 ## Installation
 
-Clone the repository:
+```bash
+pip install mlmolprop
+```
+
+Optional extras:
+
+```bash
+pip install "mlmolprop[dl]"       # Keras/PyTorch models (M="dl", ModelMT, ...)
+pip install "mlmolprop[xgboost]"  # M="xgb"
+pip install "mlmolprop[all]"      # everything installable by pip alone
+```
+
+`[all]` deliberately excludes the `image` extra: `rlPyCairo` pulls in `pycairo`,
+which publishes binary wheels for Windows only and otherwise compiles against a
+system Cairo. Ask for it explicitly, or take it from conda-forge:
+
+```bash
+pip install "mlmolprop[image]"          # needs system Cairo + pkg-config
+conda install -c conda-forge rlpycairo  # recommended instead
+```
+
+For development, or to reproduce the tested environment exactly:
+
 ```bash
 git clone https://github.com/shamsaraj/mlmolprop.git
 cd mlmolprop
-```
-
-Create the environment (conda, recommended):
-```bash
 conda env create -f environment.yml
 conda activate mlmolprop
-```
-
-Or install directly with pip:
-```bash
 pip install -e .
 ```
 
