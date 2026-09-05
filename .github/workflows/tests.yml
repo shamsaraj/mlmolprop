@@ -24,7 +24,13 @@ jobs:
 
       - name: Run test suite
         shell: bash -el {0}
-        # Coverage floor is set at the level already achieved (93.8%), not an
+        env:
+          # Keras 3 defaults to the TensorFlow backend, which is not installed
+          # (see the note in pyproject.toml). Without this the whole M="dl" /
+          # ModelMT / MMoE surface silently SKIPs -- 25 tests, and every
+          # deep-learning code path uncovered.
+          KERAS_BACKEND: torch
+        # Coverage floor is set at the level already achieved, not an
         # aspiration -- it exists to catch a regression, not to force filler
         # tests. Raise it deliberately when real coverage improves.
         run: pytest -v --cov=mlmolprop --cov-report=term-missing --cov-fail-under=93
