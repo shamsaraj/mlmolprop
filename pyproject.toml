@@ -73,13 +73,19 @@ torch = ["torch>=2.0"]
 xgboost = ["xgboost>=3.0"]
 # rlPyCairo backs reportlab's raster rendering, used only by
 # image.py::svg_files_to_png() and molprep.py::RDimage() (both
-# lazy-imported, with an informative error if missing). It has no
-# prebuilt PyPI wheel on any platform -- installing it means building
-# pycairo from source against a system Cairo + pkg-config, which a bare
-# `pip install` can't provide. conda-forge ships a prebuilt binary
-# instead (see environment.yml), and that's the recommended path.
+# lazy-imported, with an informative error if missing). rlPyCairo itself
+# ships a pure-Python wheel, but it pulls in pycairo, which publishes
+# binary wheels for Windows only -- on macOS and Linux pip must compile it
+# against a system Cairo plus pkg-config, which a bare `pip install`
+# cannot provide. conda-forge ships a prebuilt binary instead (see
+# environment.yml), and that is the recommended path.
 image = ["rlPyCairo>=0.4.0"]
-all = ["mlmolprop[dl,torch,image,xgboost]"]
+# Deliberately excludes "image": `all` must stay installable by pip alone.
+# Because pip resolves every extra together, including image here made
+# `pip install mlmolprop[all]` fail outright on macOS and Linux without
+# system Cairo -- taking dl, torch and xgboost down with it even though
+# those install fine. Ask for mlmolprop[image] explicitly if you want it.
+all = ["mlmolprop[dl,torch,xgboost]"]
 
 [project.urls]
 "Homepage" = "https://github.com/shamsaraj/mlmolprop"
