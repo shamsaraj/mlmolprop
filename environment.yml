@@ -21,6 +21,7 @@ dependencies:
   - ruff=0.16
   - black=26.5
   - pytest=9.1
+  - pytest-cov
   - notebook=7.6
   - nbconvert=7.17
   - pip

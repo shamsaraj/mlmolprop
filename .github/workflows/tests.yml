@@ -24,7 +24,10 @@ jobs:
 
       - name: Run test suite
         shell: bash -el {0}
-        run: pytest -v
+        # Coverage floor is set at the level already achieved (93.8%), not an
+        # aspiration -- it exists to catch a regression, not to force filler
+        # tests. Raise it deliberately when real coverage improves.
+        run: pytest -v --cov=mlmolprop --cov-report=term-missing --cov-fail-under=93
 
   lint:
     runs-on: ubuntu-latest
