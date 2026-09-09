@@ -395,6 +395,16 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
         skips cross-validation; ``List``/``analysis`` are then ``None``).
         Ignored for M="dl", which always uses its own internal 5-fold CV.
 
+        For M="dl" the reported CV metrics are optimistically biased: each
+        fold's held-out slice is passed as ``validation_data`` and
+        ``EarlyStopping`` runs with ``restore_best_weights=True``, so the
+        epoch is selected using the same rows the fold is then scored on.
+        Treat ``q2``/``RMSECV`` as a selection signal rather than an
+        unbiased estimate. Held-out metrics are unaffected -- the final fit
+        early-stops on training loss and never sees ``xtest`` -- and so are
+        all non-"dl" model types, whose CV loop fits and predicts with
+        nothing selected on the fold.
+
     Returns
     -------
     list
@@ -555,6 +565,11 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
             early_stopping = EarlyStopping(
                 monitor="val_loss", patience=5, restore_best_weights=True
             )
+            # NOTE: this fold's held-out slice is both the EarlyStopping validation
+            # set and the slice scored below, so the epoch is selected on the rows
+            # it is then measured on -- the CV metric is optimistically biased.
+            # Documented in ModelMT()'s `cv` entry. Held-out metrics are unaffected:
+            # the final fit early-stops on training loss and never sees xtest.
             model2.fit(
                 X_train,
                 y_train,
@@ -940,6 +955,15 @@ def ModelMT(
         Whether to report the internal 5-fold CV metrics. Like ``Model()``'s
         ``M="dl"`` path, the internal CV fit always happens regardless of
         ``cv``; ``cv="off"`` only skips reporting it.
+
+        Those CV metrics are optimistically biased: each fold's held-out
+        slice is passed as ``validation_data`` and ``EarlyStopping`` runs
+        with ``restore_best_weights=True``, so the epoch is selected using
+        the same rows the fold is then scored on. Treat them as a selection
+        signal rather than an unbiased estimate. The held-out metrics are
+        unaffected -- the final fit early-stops on training loss and never
+        sees ``xtest``. The same caveat applies to :func:`ModelCMT`,
+        :func:`ModelMMoE` and :func:`ModelCMMoE`, which share this CV shape.
     Y_bounds : dict[str, tuple] or None
         Optional ``{task: (conf_low, conf_high)}`` or ``{task: (conf_low,
         conf_high, row_weight)}`` for tasks that should train against
@@ -1065,6 +1089,11 @@ def ModelMT(
     for train_idx, test_idx in loo.split(X_array):
         X_train, X_test = X_array[train_idx], X_array[test_idx]
         model2 = _build()
+        # NOTE: this fold's held-out slice is both the EarlyStopping validation
+        # set and the slice scored below, so the epoch is selected on the rows
+        # it is then measured on -- the CV metric is optimistically biased.
+        # Documented in ModelMT()'s `cv` entry. Held-out metrics are unaffected:
+        # the final fit early-stops on training loss and never sees xtest.
         model2.fit(
             X_train,
             {t: fit_targets[t][train_idx] for t in task_names},
@@ -1257,6 +1286,10 @@ def ModelMMoE(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="
     return shape as :func:`ModelMT` -- see its docstring for everything that
     doesn't differ. ``params`` recognizes one extra key: ``n_experts`` (default 4).
 
+    That includes the CV caveat: the reported CV metrics are optimistically
+    biased because each fold's held-out slice doubles as the ``EarlyStopping``
+    validation set -- see :func:`ModelMT`'s ``cv`` entry.
+
     Returns
     -------
     tuple
@@ -1308,6 +1341,11 @@ def ModelMMoE(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path="
     for train_idx, test_idx in loo.split(X_array):
         X_train, X_test = X_array[train_idx], X_array[test_idx]
         model2 = _build()
+        # NOTE: this fold's held-out slice is both the EarlyStopping validation
+        # set and the slice scored below, so the epoch is selected on the rows
+        # it is then measured on -- the CV metric is optimistically biased.
+        # Documented in ModelMT()'s `cv` entry. Held-out metrics are unaffected:
+        # the final fit early-stops on training loss and never sees xtest.
         model2.fit(
             X_train,
             {t: Y_filled[t].to_numpy()[train_idx] for t in task_names},
@@ -1431,6 +1469,16 @@ def ModelC(
         :func:`_import_xgboost`); M="dl" requires the optional "dl" extra.
     cv : {"loo", "kf", "kfr", "shuff"}
         Cross-validation strategy for the CV-based accuracy report.
+
+        For M="dl" the reported CV metrics are optimistically biased: each
+        fold's held-out slice is passed as ``validation_data`` and
+        ``EarlyStopping`` runs with ``restore_best_weights=True``, so the
+        epoch is selected using the same rows the fold is then scored on.
+        Treat the CV accuracy/MCC as a selection signal rather than an
+        unbiased estimate. Held-out metrics are unaffected -- the final fit
+        early-stops on training loss and never sees ``xtest`` -- and so are
+        all non-"dl" model types, whose CV loop fits and predicts with
+        nothing selected on the fold.
     params : dict or None
         Model-specific hyperparameters, passed straight through as
         keyword arguments to the underlying scikit-learn estimator's
@@ -1628,6 +1676,11 @@ def ModelC(
             early_stopping = EarlyStopping(
                 monitor="val_loss", patience=5, restore_best_weights=True
             )
+            # NOTE: this fold's held-out slice is both the EarlyStopping validation
+            # set and the slice scored below, so the epoch is selected on the rows
+            # it is then measured on -- the CV metric is optimistically biased.
+            # Documented in ModelMT()'s `cv` entry. Held-out metrics are unaffected:
+            # the final fit early-stops on training loss and never sees xtest.
             model2.fit(
                 X_train,
                 y_train,
@@ -1944,7 +1997,9 @@ def ModelCMT(
     (used by ``ModelC()``'s single-task ``M="dl"`` path) has no per-output
     equivalent for a multi-output model -- same "class_weight-as-
     sample_weight" pattern this module already uses for ``M="gb"``/``M="xgb"``
-    in ``ModelC()``.
+    in ``ModelC()``. The CV caveat carries over too: the reported CV metrics are
+    optimistically biased because each fold's held-out slice doubles as the
+    ``EarlyStopping`` validation set -- see :func:`ModelMT`'s ``cv`` entry.
 
     Internal CV uses a plain ``KFold`` split rather than ``ModelC()``'s
     ``StratifiedKFold`` -- joint stratification across ``len(task_names)``
@@ -2032,6 +2087,11 @@ def ModelCMT(
     for train_idx, test_idx in loo.split(X_array):
         X_train, X_test = X_array[train_idx], X_array[test_idx]
         model2 = _build()
+        # NOTE: this fold's held-out slice is both the EarlyStopping validation
+        # set and the slice scored below, so the epoch is selected on the rows
+        # it is then measured on -- the CV metric is optimistically biased.
+        # Documented in ModelMT()'s `cv` entry. Held-out metrics are unaffected:
+        # the final fit early-stops on training loss and never sees xtest.
         model2.fit(
             X_train,
             {t: Y_filled[t].to_numpy()[train_idx] for t in task_names},
@@ -2145,6 +2205,10 @@ def ModelCMMoE(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path=
     for everything that doesn't differ. ``params`` recognizes one extra key:
     ``n_experts`` (default 4).
 
+    That includes the CV caveat: the reported CV metrics are optimistically
+    biased because each fold's held-out slice doubles as the ``EarlyStopping``
+    validation set -- see :func:`ModelMT`'s ``cv`` entry.
+
     Returns
     -------
     tuple
@@ -2209,6 +2273,11 @@ def ModelCMMoE(x, Y, xtest, Ytest, v_names, params=None, rs=None, cv="kf", path=
     for train_idx, test_idx in loo.split(X_array):
         X_train, X_test = X_array[train_idx], X_array[test_idx]
         model2 = _build()
+        # NOTE: this fold's held-out slice is both the EarlyStopping validation
+        # set and the slice scored below, so the epoch is selected on the rows
+        # it is then measured on -- the CV metric is optimistically biased.
+        # Documented in ModelMT()'s `cv` entry. Held-out metrics are unaffected:
+        # the final fit early-stops on training loss and never sees xtest.
         model2.fit(
             X_train,
             {t: Y_filled[t].to_numpy()[train_idx] for t in task_names},
