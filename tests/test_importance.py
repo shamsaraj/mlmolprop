@@ -671,6 +671,13 @@ def test_stable_features_takes_direction_from_reference_for_unsigned_tables():
     assert out["direction"].to_dict() == {"a": 1, "b": -1}  # c has no direction: dropped
 
 
+def test_stable_features_never_selects_a_negative_magnitude_importance():
+    # A negative permutation importance means shuffling the feature improved the
+    # score: no importance at all, however steady across repeats.
+    table = _mean_std_table({"real": (0.05, 0.01), "noise": (-0.05, 0.01)}, signed=False)
+    assert list(stable_features(table, threshold=2.0).index) == ["real"]
+
+
 def test_stable_features_top_n_caps_each_direction():
     table = _mean_std_table(
         {"p1": (3, 1), "p2": (5, 1), "p3": (4, 1), "n1": (-6, 1), "n2": (-7, 1)}

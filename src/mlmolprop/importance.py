@@ -815,8 +815,11 @@ def stable_features(
     threshold : float or None, default 2.0
         Minimum ``|mean| / (std + 1e-6)``: the signal is at least this many
         times its noise, like a t-statistic cutoff (2-3 is a common range).
-        Equivalent to requiring ``|mean| - threshold * std > 0``. None keeps
-        every feature (e.g. to rank with ``top_n`` alone).
+        Equivalent to requiring ``|mean| - threshold * std > 0``. For a
+        magnitude-only table the mean itself must clear it, so a negative
+        permutation importance (the score improved when the feature was
+        shuffled) never counts as stable. None keeps every feature (e.g. to
+        rank with ``top_n`` alone).
     reference : pandas.Series or DataFrame, optional
         Signed scores per feature (or a table, whose ``importance`` column is
         used), e.g. the fitted model's ``variable_importance``. For a signed
@@ -858,8 +861,10 @@ def stable_features(
             "variable_importance(method='permutation')"
         )
     mean = table["mean"].astype(float)
-    snr = mean.abs() / (table["std"].astype(float) + _EPS)
     signed = table.attrs.get("signed", bool((mean < 0).any()))
+    # Signed: either direction counts. Magnitude-only: a negative mean is no
+    # importance at all, so it keeps its sign and can't clear a threshold.
+    snr = (mean.abs() if signed else mean) / (table["std"].astype(float) + _EPS)
     direction = np.sign(mean) if signed else pd.Series(0.0, index=table.index)
     keep = pd.Series(True, index=table.index)
     if reference is not None:
