@@ -16,6 +16,7 @@ dependencies:
   - keras=3.15
   - pytorch=2.13
   - xgboost=3.4
+  - shap=0.52
   - lime=0.2
   # dev tools
   - ruff=0.16

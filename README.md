@@ -23,7 +23,7 @@ This toolkit integrates **RDKit**, **scikit-learn**, **Keras/PyTorch**, **LIME**
 | **descriptors.py** | Computes molecular descriptors, merges with activity data, and exports QSAR-ready datasets. |
 | **molprep.py** | Prepares molecular structures (SDF/SMILES): salt removal, 3D embedding, charge calculation, and image generation. |
 | **model.py** | Fits and evaluates regression/classification models (PLS, Random Forest, SVM, MLP, a small Keras deep-learning classifier, etc.). |
-| **importance.py** | Explains model predictions with LIME, and partial dependence plots. |
+| **importance.py** | Variable importance for any fitted model in one table format (native, permutation, SHAP, LIME, bit flip, plus model-free enrichment/significance), bootstrap stability, stable-feature selection and cross-method consensus; LIME explanations and partial dependence plots. |
 | **image.py** | Converts molecule/data images to on-disk artifacts (PNG, CSV, SVG). |
 | **plots.py** | Scatter/histogram/2D-histogram/ROC grid plots of a feature set vs. a target. |
 
@@ -40,6 +40,7 @@ Optional extras:
 ```bash
 pip install "mlmolprop[dl]"       # Keras/PyTorch models (M="dl", ModelMT, ...)
 pip install "mlmolprop[xgboost]"  # M="xgb"
+pip install "mlmolprop[shap]"     # SHAP importance for tree and other non-linear models
 pip install "mlmolprop[all]"      # everything installable by pip alone
 ```
 
@@ -114,6 +115,37 @@ model_result = Model(X_train, y_train, X_test, y_test, v_names, M="rf")
 print(model_result[0])  # metrics dict
 ```
 
+### 5. Interpret the Model
+```python
+from mlmolprop import (
+    ModelC, bootstrap_importance, consensus_features, enrichment_importance,
+    stable_features, variable_importance,
+)
+
+# A classifier on fingerprint bits (split with data_prep(..., mod="class"))
+result, model = ModelC(X_train, y_train, X_test, y_test, v_names, M="cnb")
+
+# One table format whatever the algorithm or method
+native = variable_importance(model, v_names)  # coefficients, NB log-odds, tree importances
+shap_table = variable_importance(model, v_names, "shap", X=X_train)
+lime_table = variable_importance(model, v_names, "lime", X=X_train)
+
+# Stability: refit on bootstrap resamples; keep features whose signal clears its noise
+stability = bootstrap_importance(model, X_train, y_train, v_names, n_boot=100)
+stable = stable_features(stability, threshold=2.0, reference=native,
+                         X=X_train, y=y_train, min_support=3)
+
+# Consensus: features most methods rank in their top 35, per direction
+consensus = consensus_features(
+    {"native": native, "shap": shap_table, "lime": lime_table, "stability": stability,
+     "enrichment": enrichment_importance(X_train, y_train, v_names)},
+    top_n=35, min_agree=3,
+)
+# Each method's top 35 per side is filled even when few features matter, so
+# intersect with the stable set rather than reading the consensus alone
+final = consensus[consensus["selected"]].index.intersection(stable.index)
+```
+
 ---
 
 ## Example Notebook
@@ -157,7 +189,9 @@ dev tools are included in `environment.yml`).
 - Data preprocessing: imputation, normalization, scaling, categorical encoding
 - Correlation filtering and variance thresholding
 - Machine learning for regression and classification, including a small Keras MLP
-- Model interpretation via LIME and partial dependence plots
+- Model interpretation: variable importance across algorithms and methods, bootstrap
+  stability, stable-feature selection and cross-method consensus; LIME and partial
+  dependence plots
 - Visualization: PCA, ROC, histograms, confusion matrices, clustering
 
 ---

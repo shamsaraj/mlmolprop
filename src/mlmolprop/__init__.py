@@ -18,7 +18,16 @@ from .correlation import find_correlation
 from .descriptors import CI, dataframe, desc, tanimoto
 from .fingerprint import Fingerprint, explicit_bitvect_to_numpy_array, make_fingerprints
 from .image import highlight, images_to_dataframe, svg_files_to_png
-from .importance import lime_explain, partial
+from .importance import (
+    bootstrap_importance,
+    consensus_features,
+    enrichment_importance,
+    lime_explain,
+    partial,
+    significance_importance,
+    stable_features,
+    variable_importance,
+)
 from .model import (
     Model,
     ModelC,
@@ -64,10 +73,13 @@ __all__ = [
     "VarianceThreshold_selector",
     "analyse",
     "average_bygroup",
+    "bootstrap_importance",
     "clus_uns",
+    "consensus_features",
     "data_prep",
     "dataframe",
     "desc",
+    "enrichment_importance",
     "explicit_bitvect_to_numpy_array",
     "file2list",
     "file2object",
@@ -94,7 +106,10 @@ __all__ = [
     "r2test",
     "rocc",
     "safe_divide",
+    "significance_importance",
+    "stable_features",
     "svg_files_to_png",
     "tanimoto",
     "twodlist",
+    "variable_importance",
 ]

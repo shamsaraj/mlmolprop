@@ -71,6 +71,12 @@ torch = ["torch>=2.0"]
 # xgboost is used only by model.py's M="xgb" path (lazy-imported there via
 # _import_xgboost(), with an informative error if missing).
 xgboost = ["xgboost>=3.0"]
+# shap is used only by importance.py's method="shap" for tree and other
+# non-linear models (lazy-imported there via _import_shap(); linear and Naive
+# Bayes models use the exact closed form and don't need it). Optional because
+# shap pulls in numba/llvmlite, a large compiled stack that lags new numpy and
+# Python releases. 0.46 is the first shap release that supports numpy 2.
+shap = ["shap>=0.46"]
 # rlPyCairo backs reportlab's raster rendering, used only by
 # image.py::svg_files_to_png() and molprep.py::RDimage() (both
 # lazy-imported, with an informative error if missing). rlPyCairo itself
@@ -85,7 +91,7 @@ image = ["rlPyCairo>=0.4.0"]
 # `pip install mlmolprop[all]` fail outright on macOS and Linux without
 # system Cairo -- taking dl, torch and xgboost down with it even though
 # those install fine. Ask for mlmolprop[image] explicitly if you want it.
-all = ["mlmolprop[dl,torch,xgboost]"]
+all = ["mlmolprop[dl,torch,xgboost,shap]"]
 
 [project.urls]
 "Homepage" = "https://github.com/shamsaraj/mlmolprop"

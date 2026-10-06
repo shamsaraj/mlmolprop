@@ -70,6 +70,22 @@ from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.utils.class_weight import compute_sample_weight
 
 from .basic import RMSEP_CV_C, F, analyse, q2r2, r2test
+from .importance import _native_values
+
+
+def _native_vi(model, v_names):
+    """The fitted model's native variable importance as a one-column frame, or None.
+
+    Model() and ModelC() report it in this legacy shape (column ``0``, indexed
+    by feature name); :func:`mlmolprop.importance.variable_importance` is the
+    tidy, sorted form of the same numbers. None when the model exposes no
+    native importance, or more than one output (multiclass/multi-target).
+    """
+    try:
+        found = _native_values(model)
+    except ValueError:
+        return None
+    return None if found is None else pd.DataFrame(data=found[0], index=v_names)
 
 
 def _distinct_colors(count: int) -> list:
@@ -646,38 +662,12 @@ def Model(x, y, xtest, ytest, v_names, params=None, M="mlr", rs=None, cv="loo", 
         rmse = RMSEP_CV_C(ytests, ypreds)
         List = {"q2": q2, "RMSECV": rmse, "Q2F2": q2f2}
 
-    if M in ("svm", "dl"):
-        sorted_VI = ""
-    else:
-        try:
-            if M == "nn":
-                # "Connection weights" importance (Olden & Jackson, 2002,
-                # Ecological Modelling 154:135-150): the product of all
-                # weight matrices, input -> ... -> output, sums the product
-                # of weights along every path through the network. This is
-                # only the network's *true* input-output sensitivity if
-                # every activation is the identity function; sklearn's
-                # MLPRegressor/MLPClassifier default to "relu" here (not
-                # overridden above), so this ignores every ReLU threshold
-                # and is a rough linear surrogate, not an exact value --
-                # one that gets rougher the more hidden layers there are.
-                # Treat it as directional (which features rank higher),
-                # not as a precise coefficient.
-                VI = np.linalg.multi_dot(model.coefs_)
-            elif M in ("rf", "tree", "ex", "gb", "xgb", "ada"):
-                VI = model.feature_importances_
-            elif M == "pls":
-                # PLSRegression.coef_ is (n_targets, n_features), the
-                # opposite orientation from the other linear models here.
-                VI = model.coef_.reshape(-1)
-            else:
-                VI = model.coef_
-            VI = pd.DataFrame(data=VI, index=v_names)
-            sorted_VI = VI.sort_values(by=[0])
-        except AttributeError:
-            # Some estimators (e.g. kn, gu, bg) expose neither coef_ nor
-            # feature_importances_ -- no variable importance available.
-            sorted_VI = ""
+    # The native importance of whatever was fitted (coefficients, tree
+    # importances, MLP connection weights -- see
+    # importance.variable_importance), or "" for a model that exposes none
+    # (kn, gu, bg, hgb, a non-linear svm, dl).
+    VI = _native_vi(model, v_names)
+    sorted_VI = "" if VI is None else VI.sort_values(by=[0])
 
     if M == "mlr":
         result = {
@@ -1508,7 +1498,6 @@ def ModelC(
     X_array = np.array(x)
     y_array = np.array(y)
     p = dict(params or {})
-    svm_kernel = p.get("kernel", "rbf")
     # Set only for models whose underlying estimator has no native
     # class_weight constructor argument (gb, xgb) -- "balanced" here means
     # a per-fit sample_weight (computed from whatever y that fit actually
@@ -1773,7 +1762,6 @@ def ModelC(
         accuracy_score_LOO = ""
 
     if M == "tree":
-        VI = model.feature_importances_
         try:
             import graphviz
             from sklearn.tree import export_graphviz
@@ -1795,50 +1783,14 @@ def ModelC(
             # Optional visualization; many possible failure modes
             # (missing graphviz package, missing system binary, ...).
             print(f"could not render decision tree diagram: {exc}")
-    elif M in ("rf", "ex", "gb", "xgb", "ada"):
-        VI = model.feature_importances_
-    elif M == "svm":
-        if svm_kernel == "linear":
-            VI = model.coef_[0]
-        else:
-            VI = ""
-    elif M == "nn":
-        # "Connection weights" importance -- see the fuller note in Model()
-        # above. Rough linear surrogate (ignores ReLU), directional only.
-        VI = np.linalg.multi_dot(model.coefs_)
-    elif (
-        M in ("qua", "kn", "gu", "bg", "rn", "hgb")
-        or M == "gunb"
-        or M == "cnb"
-        or M == "dl"
-    ):
-        # HistGradientBoosting* (unlike RandomForest/GradientBoosting/
-        # ExtraTrees) exposes neither feature_importances_ nor coef_ --
-        # sklearn's own recommendation is permutation_importance instead,
-        # which needs a scorer/held-out data, not just the fitted model.
-        VI = ""
-    elif M == "rg":
-        # RidgeClassifier's binary coef_ is 1D (n_features,) on scikit-learn
-        # >= ~1.9 but (1, n_features) on older releases, so neither a bare
-        # `coef_` nor `coef_[0]` is right on both -- the first grabs a
-        # (1, n) frame on old sklearn, the second a single coefficient on
-        # new. Branch on ndim instead, which also keeps the multiclass
-        # (n_classes, n_features) case taking the first class like the
-        # other linear classifiers below.
-        VI = model.coef_ if model.coef_.ndim == 1 else model.coef_[0]
-    else:
-        VI = model.coef_[0]
 
-    if (
-        M in ("qua", "kn", "gu", "bg", "rn", "hgb", "dl")
-        or M == "gunb"
-        or M == "cnb"
-        or M == "svm"
-        and svm_kernel != "linear"
-    ):
-        sorted_VI = ""
+    # Same native importance as Model() (see importance.variable_importance):
+    # "" for a model that exposes none (qua, kn, rn, gu, gunb, bg, hgb, a
+    # non-linear svm, dl). cnb reports its class-1-vs-0 log-odds.
+    VI = _native_vi(model, v_names)
+    if VI is None:
+        VI = sorted_VI = ""
     else:
-        VI = pd.DataFrame(data=VI, index=v_names)
         sorted_VI = VI.sort_values(by=[0])
 
     if M in (

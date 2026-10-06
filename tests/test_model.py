@@ -323,6 +323,88 @@ def test_modelc_every_classifier_type(clas_train_test, M):
     assert 0.0 <= result["accuracy_score_test"] <= 1.0
 
 
+def _attribute_vi(model):
+    """Variable importance read straight off a fitted model's attributes.
+
+    The per-attribute rule Model()/ModelC() applied before they delegated to
+    mlmolprop.importance -- kept here as an independent oracle for that.
+    """
+    if hasattr(model, "coefs_"):
+        return np.linalg.multi_dot(model.coefs_).ravel()
+    if getattr(model, "feature_importances_", None) is not None:
+        return np.asarray(model.feature_importances_, dtype=float)
+    return np.asarray(model.coef_, dtype=float).ravel()
+
+
+@pytest.mark.parametrize("M", CLASSIFIERS)
+def test_modelc_variable_importance_matches_the_fitted_model(clas_train_test, M):
+    X_train, y_train, X_test, y_test, v_names = clas_train_test
+    result, model = ModelC(
+        X_train, y_train, X_test, y_test, v_names,
+        params=CLASSIFIER_TEST_PARAMS.get(M, {}), M=M, rs=0, cv="off",
+    )
+    if M in ("qua", "kn", "rn", "gu", "gunb", "bg", "hgb", "svm"):  # svm: rbf kernel by default
+        assert result["VI"] == ""
+        assert result["Variable Importance"] == ""
+        return
+    vi = result["Variable Importance"]
+    assert list(vi.columns) == [0]
+    assert vi[0].is_monotonic_increasing
+    if M == "cnb":
+        # Reported since importance.py took over (was ""): the class-1-vs-0 log-odds.
+        expected = model.feature_log_prob_[1] - model.feature_log_prob_[0]
+    else:
+        expected = _attribute_vi(model)
+    assert vi[0].reindex(v_names).to_numpy() == pytest.approx(expected)
+    assert result["VI"][0].to_numpy() == pytest.approx(expected)  # unsorted, training order
+
+
+@pytest.mark.parametrize("M", REGRESSORS)
+def test_model_variable_importance_matches_the_fitted_model(reg_train_test, M):
+    X_train, y_train, X_test, y_test, v_names = reg_train_test
+    result, _, model, _ = Model(
+        X_train, y_train, X_test, y_test, v_names,
+        params=REGRESSOR_TEST_PARAMS.get(M, {}), M=M, rs=0, cv="off",
+    )
+    if M == "mlr":  # reports "Coefficients" instead
+        assert "Variable Importance" not in result
+        return
+    if M in ("svm", "kn", "gu", "bg", "hgb"):  # svm: rbf kernel by default
+        assert result["Variable Importance"] == ""
+        return
+    # ransa: reported since importance.py took over (was ""), from its inlier model.
+    expected = model.estimator_.coef_ if M == "ransa" else _attribute_vi(model)
+    vi = result["Variable Importance"]
+    assert vi[0].is_monotonic_increasing
+    assert vi[0].reindex(v_names).to_numpy() == pytest.approx(expected)
+
+
+def test_native_vi_is_empty_for_a_multiclass_model(rng):
+    # Several rows of coefficients: no single importance per feature, so no VI
+    # (rather than silently reporting the first class's row).
+    from sklearn.linear_model import LogisticRegression
+
+    X = pd.DataFrame(rng.normal(size=(30, 3)), columns=["a", "b", "c"])
+    model = LogisticRegression().fit(X, np.arange(30) % 3)
+    assert model_module._native_vi(model, list(X.columns)) is None
+
+
+@pytest.mark.parametrize("fit", [Model, ModelC])
+def test_linear_kernel_svm_reports_its_coefficients(reg_train_test, clas_train_test, fit):
+    # A linear-kernel SVM has coefficients; Model() used to report "" for every
+    # M="svm" regardless of kernel.
+    X_train, y_train, X_test, y_test, v_names = (
+        reg_train_test if fit is Model else clas_train_test
+    )
+    out = fit(
+        X_train, y_train, X_test, y_test, v_names,
+        params={"kernel": "linear", "C": 3}, M="svm", rs=0, cv="off",
+    )
+    result, model = out[0], out[-2] if fit is Model else out[1]
+    vi = result["Variable Importance"]
+    assert vi[0].reindex(v_names).to_numpy() == pytest.approx(np.ravel(model.coef_))
+
+
 @pytest.mark.parametrize("M", ["gb", "xgb"])
 def test_modelc_gb_xgb_default_to_balanced_sample_weight(clas_train_test, monkeypatch, M):
     # Unlike rf/svm/lr/hgb, GradientBoostingClassifier/XGBClassifier have no
