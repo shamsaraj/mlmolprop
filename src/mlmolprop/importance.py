@@ -536,7 +536,7 @@ def _score_function(model):
     Arrays are passed to the model as DataFrames when it was fitted on one, so
     scikit-learn doesn't warn about missing feature names.
     """
-    from sklearn.base import is_classifier
+    from sklearn.base import BaseEstimator, is_classifier
 
     if type(model).__module__.split(".")[0] == "keras":
 
@@ -544,10 +544,14 @@ def _score_function(model):
             return model.predict(a, verbose=0)
 
     else:
-        try:
-            classifier = is_classifier(model)
-        except AttributeError:  # not a scikit-learn estimator at all
-            classifier = hasattr(model, "predict_proba")
+        # Any other object counts as a classifier when it gives probabilities:
+        # scikit-learn's is_classifier raises on non-estimators from 1.6 on and
+        # returns False for them before that.
+        classifier = (
+            is_classifier(model)
+            if isinstance(model, BaseEstimator)
+            else hasattr(model, "predict_proba")
+        )
         if classifier and hasattr(model, "predict_proba"):
 
             def raw(a):

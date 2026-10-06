@@ -462,7 +462,8 @@ def test_model_agnostic_methods_work_without_feature_names(bits_xy):
 
 def test_model_agnostic_methods_accept_a_plain_object_with_predict_proba(bits_xy):
     # Not a scikit-learn estimator at all (scikit-learn's is_classifier raises
-    # on it): having predict_proba is what makes it scored as a classifier.
+    # on it from 1.6, and says False before): having predict_proba is what
+    # makes it scored as a classifier.
     X, y = bits_xy
     fitted = LogisticRegression().fit(X.to_numpy(), y.to_numpy())
 
