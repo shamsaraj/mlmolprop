@@ -833,6 +833,11 @@ def stable_features(
         for a positive direction, the negative class for a negative one) that
         carry the feature, i.e. have it non-zero. Guards against features
         whose effect rests on one or two compounds. Needs ``X`` and ``y``.
+        For fingerprints, use at least 1: a feature no training compound
+        carries can still get a weight from the model's smoothing alone (a
+        Naive Bayes model gives every unseen feature the same smoothed
+        log-odds), and because that weight barely changes between resamples,
+        its signal-to-noise ratio comes out high.
 
     Returns
     -------
@@ -953,6 +958,13 @@ def consensus_features(
     important features, so on a small or one-sided feature set noise can make
     the list. Pair the consensus with :func:`stable_features` (or a threshold
     on each table) to keep it out.
+
+    Methods can also disagree systematically. With a small class, rankings by
+    model weights (coefficients, Naive Bayes log-odds, their bootstrap mean)
+    favour features carried by only a few compounds of that class, while
+    SHAP's mean magnitude and enrichment favour features many compounds carry.
+    Mixing the two kinds splits the vote, and few features of that class
+    reach ``min_agree``.
     """
     if not tables:
         raise ValueError("tables is empty")

@@ -690,6 +690,20 @@ def test_stable_features_support_counts_the_favoured_class():
     assert stable_features(unsigned, X=X, y=y)["support"].to_dict() == {"a": 3, "b": 3}
 
 
+def test_a_feature_no_compound_carries_is_stable_but_dropped_by_min_support(rng):
+    # A Naive Bayes model gives a feature that never occurs a weight from its
+    # smoothing alone, and that weight barely changes between resamples -- so it
+    # clears a signal-to-noise threshold, and only a minimum support removes it.
+    n = 300
+    X = pd.DataFrame((rng.random((n, 5)) < 0.3).astype(int), columns=[f"b{i}" for i in range(5)])
+    X["never"] = 0
+    y = pd.Series((rng.random(n) < 0.15).astype(int))  # small positive class, no signal
+    table = bootstrap_importance(ComplementNB(), X, y, list(X.columns), n_boot=20)
+    assert abs(table.loc["never", "importance"]) > 5
+    assert "never" in stable_features(table, threshold=2.0).index
+    assert "never" not in stable_features(table, threshold=2.0, X=X, y=y, min_support=1).index
+
+
 def test_stable_features_accepts_a_permutation_table(bits_xy):
     X, y = bits_xy
     names = list(X.columns)
