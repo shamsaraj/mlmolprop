@@ -106,6 +106,16 @@ from mlmolprop import data_prep
 result = data_prep("merged.csv", Scaled="on", FS="reg", Cor="on", mod="reg")
 ```
 
+To choose the feature selection itself by cross-validation, refit it inside every
+fold on the training set (selecting once on all training rows makes the scores optimistic):
+```python
+from mlmolprop import feature_selection_cv
+
+configs = [(fs, k) for fs in ("clas", "rfe_clas", "enet_clas") for k in (50, 200, 400)]
+configs.append(("enet_clas", None))  # every feature the elastic net keeps
+table = feature_selection_cv(X_train, y_train, configs, n_repeats=3, rs=1)  # F2, MCC, recall, ...
+```
+
 ### 4. Build and Evaluate Models
 ```python
 from mlmolprop import Model

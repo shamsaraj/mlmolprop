@@ -345,45 +345,15 @@ def data_prep(
         v_names = list(X_train.columns.values)
 
     if FS != "off":
+        selector = _fit_selector(X_train, y_train, FS, ndes)
         if FS == "clas":
-            selector = SelectKBest(f_classif, k=ndes).fit(X_train, y_train)
-            p_values = selector.pvalues_
             # Must be the feature count SelectKBest actually tested just
             # now (X_train.shape[1]), not v_names2 -- that was fixed back
             # when VarianceThreshold ran, and goes stale if Cor="on" drops
             # correlated features afterward.
-            bonferroni = p_values * X_train.shape[1]
+            bonferroni = selector.pvalues_ * X_train.shape[1]
             bonferroni_df = pd.DataFrame(bonferroni, index=v_names, columns=["p value"])
             bonferroni_df.to_csv("Bonferroni.csv")
-        elif FS == "reg":
-            selector = SelectKBest(score_func=f_regression, k=ndes).fit(
-                X_train, y_train
-            )
-        elif FS == "rfe_clas":
-            # step=0.1 (drop 10% of remaining features per iteration) instead of
-            # RFE's default step=1 -- one-at-a-time elimination means up to
-            # ~n_features refits to reach a small ndes, prohibitively slow on
-            # wide feature sets (ECFP4 fingerprints are ~2048 columns).
-            selector = RFE(
-                LogisticRegression(max_iter=1000), n_features_to_select=ndes, step=0.1
-            ).fit(X_train, y_train)
-        elif FS == "rfe_reg":
-            selector = RFE(
-                LinearRegression(), n_features_to_select=ndes, step=0.1
-            ).fit(X_train, y_train)
-        elif FS == "enet_clas":
-            # max_features=None (ndes left unset) keeps every feature the L1
-            # penalty doesn't zero out, instead of forcing an exact count.
-            selector = SelectFromModel(
-                LogisticRegression(solver="saga", l1_ratio=0.5, max_iter=5000),
-                max_features=ndes,
-            ).fit(X_train, y_train)
-        elif FS == "enet_reg":
-            selector = SelectFromModel(
-                ElasticNet(l1_ratio=0.5), max_features=ndes
-            ).fit(X_train, y_train)
-        else:
-            raise ValueError(f"Unknown FS: {FS!r}")
         mask = selector.get_support()
         v_names = X_train.columns[mask]
         X_train = pd.DataFrame(
@@ -413,6 +383,166 @@ def data_prep(
     result = [X_train, y_train, X_test, y_test, v_names, Xnormalized, Xscaled, v_names2]
     object2file(result, output)
     return result
+
+
+# A coefficient counts as kept by an elastic net when it is not zeroed out. SelectFromModel's
+# own default threshold is the mean |coefficient| for any estimator not purely L1-penalised,
+# which would keep only the above-average features.
+_NONZERO = 1e-5
+
+
+def _elastic_net(kind: str):
+    """The elastic-net estimator behind ``FS="enet_clas"``/``"enet_reg"``."""
+    if kind == "clas":
+        return LogisticRegression(solver="saga", l1_ratio=0.5, max_iter=5000)
+    return ElasticNet(l1_ratio=0.5)
+
+
+def _fit_selector(X_train, y_train, FS: str, ndes):
+    """Fit :func:`data_prep`'s feature selector ``FS``, keeping (up to) ``ndes`` features."""
+    if FS == "clas":
+        return SelectKBest(f_classif, k=ndes).fit(X_train, y_train)
+    if FS == "reg":
+        return SelectKBest(score_func=f_regression, k=ndes).fit(X_train, y_train)
+    if FS == "rfe_clas":
+        # step=0.1 (drop 10% of remaining features per iteration) instead of
+        # RFE's default step=1 -- one-at-a-time elimination means up to
+        # ~n_features refits to reach a small ndes, prohibitively slow on
+        # wide feature sets (ECFP4 fingerprints are ~2048 columns).
+        return RFE(
+            LogisticRegression(max_iter=1000), n_features_to_select=ndes, step=0.1
+        ).fit(X_train, y_train)
+    if FS == "rfe_reg":
+        return RFE(LinearRegression(), n_features_to_select=ndes, step=0.1).fit(
+            X_train, y_train
+        )
+    if FS in ("enet_clas", "enet_reg"):
+        # Every feature the penalty doesn't zero out, capped at the ndes
+        # largest |coefficients| (no cap with ndes=None).
+        return SelectFromModel(
+            _elastic_net(FS[5:]), threshold=_NONZERO, max_features=ndes
+        ).fit(X_train, y_train)
+    raise ValueError(f"Unknown FS: {FS!r}")
+
+
+_CV_FS = ("clas", "rfe_clas", "enet_clas")
+
+
+def feature_selection_cv(
+    X,
+    y,
+    configs,
+    model=None,
+    vt: float = 0.0,
+    cor: float | None = 0.9,
+    n_splits: int = 5,
+    n_repeats: int = 1,
+    rs: int | None = None,
+) -> pd.DataFrame:
+    """Cross-validate feature-selection settings, refitting the selection inside every fold.
+
+    Choosing a feature count (or a selection method) by cross-validation is
+    only fair when the selection is redone in each fold. Selecting once on
+    all the training rows lets every fold's held-out rows help choose the
+    features they are then scored on, so the cross-validated score comes out
+    optimistic -- more so the fewer features are kept from the more
+    candidates. Here, in each fold, the variance filter (``vt``), the
+    correlation filter (``cor``) and the selection are fit on the fold's
+    training rows only, the same steps in the same order as
+    :func:`data_prep` with ``Cor="on"``; a fresh copy of ``model`` is trained
+    on the features they keep and predicts the held-out rows.
+
+    Parameters
+    ----------
+    X : pandas.DataFrame or array-like
+        Training features, one column per feature (test rows must not be
+        included).
+    y : array-like of two classes
+        Training classes; the positive class is the larger label (``1`` for
+        0/1 labels), as in scikit-learn's ``classes_[1]``.
+    configs : iterable of (str, int or None)
+        ``(FS, ndes)`` pairs as for :func:`data_prep`: ``FS`` one of
+        ``"clas"`` (SelectKBest F-test), ``"rfe_clas"`` (RFE with a logistic
+        regression) or ``"enet_clas"`` (elastic-net logistic regression),
+        keeping (up to) ``ndes`` features; ``ndes=None`` with ``"enet_clas"``
+        keeps every feature the elastic net doesn't zero out.
+    model : unfitted classifier, optional
+        Cloned for every fold and configuration. Defaults to
+        ``ComplementNB()``.
+    vt : float, default 0.0
+        Variance threshold, as ``data_prep``'s ``vt``.
+    cor : float or None, default 0.9
+        Drop one of each pair of features correlated above this (``None``
+        skips the filter).
+    n_splits, n_repeats : int
+        Stratified k-fold cross-validation, repeated with different
+        shuffles.
+    rs : int or None
+        Seeds the folds.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per configuration, in the given order: ``FS``, ``ndes``,
+        ``n_features`` (features kept, averaged over folds), and from the
+        pooled out-of-fold predictions of each repeat, averaged over the
+        repeats: ``F2`` (recall weighted twice as much as precision), ``MCC``,
+        ``recall``, ``specificity``, ``precision`` and ``accuracy``.
+    """
+    from sklearn.base import clone
+    from sklearn.metrics import confusion_matrix, fbeta_score, matthews_corrcoef
+    from sklearn.model_selection import RepeatedStratifiedKFold
+    from sklearn.naive_bayes import ComplementNB
+
+    configs = [(fs, ndes) for fs, ndes in configs]
+    unknown = sorted({fs for fs, _ in configs} - set(_CV_FS))
+    if unknown:
+        raise ValueError(f"FS must be one of {_CV_FS}, got {unknown}")
+    model = ComplementNB() if model is None else model
+    X = pd.DataFrame(X).reset_index(drop=True)
+    y = np.asarray(y)
+    positive = np.unique(y)[-1]
+
+    folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=rs)
+    predicted = {c: np.empty((n_repeats, len(y)), dtype=y.dtype) for c in configs}
+    kept = {c: [] for c in configs}
+    for i, (train, held_out) in enumerate(folds.split(X, y)):
+        X_train, X_held, y_train = X.iloc[train], X.iloc[held_out], y[train]
+        columns = X_train.columns[VarianceThreshold(vt).fit(X_train).get_support()]
+        X_train, X_held = X_train[columns], X_held[columns]
+        if cor is not None:
+            dropped = find_correlation(X_train, cor)
+            X_train, X_held = X_train.drop(columns=dropped), X_held.drop(columns=dropped)
+        enet = None  # one elastic-net fit per fold serves every enet setting
+        for fs, ndes in configs:
+            if fs == "enet_clas":
+                enet = enet if enet is not None else _elastic_net("clas").fit(X_train, y_train)
+                mask = SelectFromModel(
+                    enet, prefit=True, threshold=_NONZERO, max_features=ndes
+                ).get_support()
+            else:
+                mask = _fit_selector(X_train, y_train, fs, ndes).get_support()
+            fitted = clone(model).fit(X_train.loc[:, mask], y_train)
+            predicted[fs, ndes][i // n_splits, held_out] = fitted.predict(X_held.loc[:, mask])
+            kept[fs, ndes].append(int(mask.sum()))
+
+    def scores(pred):
+        tn, fp, fn, tp = confusion_matrix(y == positive, pred == positive, labels=[False, True]).ravel()
+        return {
+            "F2": fbeta_score(y == positive, pred == positive, beta=2, zero_division=0),
+            "MCC": matthews_corrcoef(y, pred),
+            "recall": tp / (tp + fn) if tp + fn else 0.0,
+            "specificity": tn / (tn + fp) if tn + fp else 0.0,
+            "precision": tp / (tp + fp) if tp + fp else 0.0,
+            "accuracy": (tp + tn) / len(y),
+        }
+
+    rows = []
+    for fs, ndes in configs:
+        per_repeat = pd.DataFrame([scores(p) for p in predicted[fs, ndes]])
+        rows.append({"FS": fs, "ndes": ndes, "n_features": float(np.mean(kept[fs, ndes])),
+                     **per_repeat.mean().to_dict()})
+    return pd.DataFrame(rows)
 
 
 def scaffold_split(names, smiles, test_size: float = 0.2, rs: int | None = None):

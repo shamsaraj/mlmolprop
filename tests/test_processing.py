@@ -9,6 +9,7 @@ from mlmolprop.processing import (
     VarianceThreshold_selector,
     average_bygroup,
     data_prep,
+    feature_selection_cv,
     file2list,
     file2object,
     list2file,
@@ -672,6 +673,64 @@ def test_data_prep_fs_enet_clas_selects_features(fs_dataset_csv):
     )
     v_names = result[4]
     assert len(v_names) == 2
+
+
+def test_data_prep_fs_enet_clas_without_fixed_k_keeps_every_nonzero_coefficient(fs_dataset_csv):
+    # ndes=None keeps every feature the penalty leaves non-zero -- not just the
+    # above-average ones, SelectFromModel's default for an elastic net
+    from sklearn.linear_model import LogisticRegression
+
+    kwargs = {"TARGET": "y_clas", "REMOVE": ["y_reg"], "mod": "class", "ratio": 0.25, "rs": 0}
+    X_train, y_train = data_prep(fs_dataset_csv, **kwargs)[:2]
+    coef = LogisticRegression(solver="saga", l1_ratio=0.5, max_iter=5000).fit(X_train, y_train).coef_
+    kept = data_prep(fs_dataset_csv, FS="enet_clas", ndes=None, **kwargs)[4]
+    assert len(kept) == int((np.abs(coef) > 1e-5).sum())
+
+
+def _binary_features(rng, n, informative, noise):
+    """0/1 features: ``informative`` set more often in class 1, ``noise`` unrelated to it."""
+    y = rng.integers(0, 2, size=n)
+    signal = rng.random((n, informative)) < np.where(y[:, None] == 1, 0.8, 0.2)
+    junk = rng.random((n, noise)) < 0.3
+    names = [f"i{j}" for j in range(informative)] + [f"n{j}" for j in range(noise)]
+    return pd.DataFrame(np.hstack([signal, junk]).astype(int), columns=names), y
+
+
+def test_feature_selection_cv_reports_every_configuration(rng):
+    X, y = _binary_features(rng, n=150, informative=5, noise=25)
+    configs = [("clas", 5), ("rfe_clas", 5), ("enet_clas", 5), ("enet_clas", None)]
+    table = feature_selection_cv(X, y, configs, n_splits=3, rs=0)
+    assert [(fs, None if pd.isna(n) else int(n)) for fs, n in zip(table["FS"], table["ndes"])] == configs
+    assert (table.loc[table["FS"] != "enet_clas", "n_features"] == 5).all()
+    assert table.loc[2, "n_features"] <= 5 <= table.loc[3, "n_features"] <= X.shape[1]
+    assert table[["F2", "recall", "specificity", "precision", "accuracy"]].stack().between(0, 1).all()
+    assert table["MCC"].between(-1, 1).all()
+    assert (table["MCC"] > 0.3).all()  # the informative bits are found
+
+
+def test_feature_selection_cv_is_not_optimistic_on_noise(rng):
+    # Labels unrelated to the features: refitting the selection in every fold
+    # keeps the cross-validated MCC near zero, while selecting once on all rows
+    # lets the held-out rows choose their own features and inflates it.
+    from sklearn.feature_selection import SelectKBest, f_classif
+    from sklearn.metrics import matthews_corrcoef
+    from sklearn.model_selection import StratifiedKFold, cross_val_predict
+    from sklearn.naive_bayes import ComplementNB
+
+    X, _ = _binary_features(rng, n=120, informative=0, noise=400)
+    y = rng.integers(0, 2, size=len(X))
+    in_fold = feature_selection_cv(X, y, [("clas", 10)], cor=None, n_repeats=3, rs=0).loc[0, "MCC"]
+    keep = SelectKBest(f_classif, k=10).fit(X, y).get_support()
+    folds = StratifiedKFold(5, shuffle=True, random_state=0)
+    selected_once = matthews_corrcoef(y, cross_val_predict(ComplementNB(), X.loc[:, keep], y, cv=folds))
+    assert abs(in_fold) < 0.3  # chance level (over 8 seeds: -0.12 to 0.26)
+    assert selected_once > in_fold + 0.15  # (selected once: 0.32 to 0.55)
+
+
+def test_feature_selection_cv_rejects_regression_selectors(rng):
+    X, y = _binary_features(rng, n=40, informative=2, noise=4)
+    with pytest.raises(ValueError):
+        feature_selection_cv(X, y, [("reg", 2)])
 
 
 def test_data_prep_unknown_fs_raises(dataset_csv):
