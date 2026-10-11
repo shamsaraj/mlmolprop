@@ -8,6 +8,8 @@ from mlmolprop.processing import (
     SelectKBest_selector,
     VarianceThreshold_selector,
     average_bygroup,
+    best_without_overfitting,
+    corrected_resampled_ttest,
     data_prep,
     feature_selection_cv,
     file2list,
@@ -731,6 +733,126 @@ def test_feature_selection_cv_rejects_regression_selectors(rng):
     X, y = _binary_features(rng, n=40, informative=2, noise=4)
     with pytest.raises(ValueError):
         feature_selection_cv(X, y, [("reg", 2)])
+
+
+def test_feature_selection_cv_return_folds_adds_per_fold_scores(rng):
+    X, y = _binary_features(rng, n=150, informative=5, noise=25)
+    configs = [("clas", 5), ("rfe_clas", 8)]  # deterministic selectors: the two calls must agree
+    plain = feature_selection_cv(X, y, configs, n_splits=3, n_repeats=2, rs=0)
+    table, folds = feature_selection_cv(X, y, configs, n_splits=3, n_repeats=2, rs=0, return_folds=True)
+    pd.testing.assert_frame_equal(table, plain)
+    assert len(folds) == len(configs) * 3 * 2
+    assert sorted(folds["fold"].unique()) == list(range(6))
+    assert (folds.groupby("fold")["repeat"].nunique() == 1).all()
+    assert folds.groupby(["FS", "ndes"])["fold"].nunique().eq(6).all()
+    assert (folds["n_features"] == folds["ndes"]).all()
+    metrics = ["F2", "MCC", "recall", "specificity", "precision", "accuracy"]
+    assert set(metrics + [f"{m}_train" for m in metrics]) <= set(folds.columns)
+
+
+def test_feature_selection_cv_training_scores_show_overfitting_on_noise(rng):
+    # Labels unrelated to the features: held-out MCC stays near chance, while
+    # each fold's model, with features chosen on its own training rows, fits
+    # those rows well.
+    X, _ = _binary_features(rng, n=120, informative=0, noise=300)
+    y = rng.integers(0, 2, size=len(X))
+    _, folds = feature_selection_cv(X, y, [("clas", 10)], cor=None, n_repeats=2, rs=0, return_folds=True)
+    assert abs(folds["MCC"].mean()) < 0.2
+    assert folds["MCC_train"].mean() > folds["MCC"].mean() + 0.2
+
+
+def test_corrected_resampled_ttest_identical_scores():
+    a = np.array([0.4, 0.5, 0.6, 0.55, 0.45])
+    assert corrected_resampled_ttest(a, a) == (0.0, 1.0)
+    assert corrected_resampled_ttest(a, a, alternative="greater") == (0.0, 0.5)
+
+
+def test_corrected_resampled_ttest_matches_its_formula(rng):
+    from scipy import stats
+
+    d = rng.normal(0.05, 0.1, size=10)
+    t, p = corrected_resampled_ttest(d, n_splits=5)
+    expected = d.mean() / np.sqrt((1 / 10 + 1 / 4) * d.var(ddof=1))
+    assert t == pytest.approx(expected)
+    assert p == pytest.approx(2 * stats.t(9).sf(abs(expected)))
+
+
+def test_corrected_resampled_ttest_is_more_cautious_than_a_plain_paired_test(rng):
+    from scipy import stats
+
+    a = rng.normal(0.5, 0.05, size=25)
+    b = a - 0.03 + rng.normal(0, 0.03, size=25)
+    t, p = corrected_resampled_ttest(a, b, n_splits=5)
+    assert p > stats.ttest_rel(a, b).pvalue
+    greater = corrected_resampled_ttest(a, b, alternative="greater")[1]
+    less = corrected_resampled_ttest(a, b, alternative="less")[1]
+    assert greater + less == pytest.approx(1)
+    assert min(greater, less) == pytest.approx(p / 2)
+    assert corrected_resampled_ttest(a - b)[0] == pytest.approx(t)
+
+
+def test_corrected_resampled_ttest_rejects_bad_input():
+    with pytest.raises(ValueError):
+        corrected_resampled_ttest([0.1])
+    with pytest.raises(ValueError):
+        corrected_resampled_ttest([0.1, 0.2], [0.0, 0.1], alternative="bigger")
+
+
+def _synthetic_cv(rng, settings, n_splits=5, n_repeats=4):
+    """feature_selection_cv's (table, folds) for settings {(FS, ndes): (held-out MCC, gap)}.
+
+    Folds share a difficulty effect, as real folds do, so the paired tests can see small differences.
+    """
+    n = n_splits * n_repeats
+    difficulty = rng.normal(0, 0.05, size=n)
+    rows, fold_rows = [], []
+    for (fs, ndes), (held, gap) in settings.items():
+        scores = held + difficulty + rng.normal(0, 0.01, size=n)
+        train = scores + gap + rng.normal(0, 0.01, size=n)
+        fold_rows += [{"FS": fs, "ndes": ndes, "repeat": i // n_splits, "fold": i, "n_features": ndes,
+                       "MCC": scores[i], "MCC_train": train[i]} for i in range(n)]
+        rows.append({"FS": fs, "ndes": ndes, "n_features": float(ndes), "MCC": float(scores.mean())})
+    return pd.DataFrame(rows), pd.DataFrame(fold_rows)
+
+
+def _check_choice(report):
+    """What best_without_overfitting promises, whatever the data."""
+    assert report["chosen"].sum() == 1
+    chosen = report[report["chosen"]].iloc[0]
+    assert chosen["competitive"] and not chosen["overfits"]
+    eligible = report[report["competitive"] & ~report["overfits"]]
+    assert chosen["MCC"] == eligible["MCC"].max()
+    assert report["MCC"].is_monotonic_decreasing
+    return chosen
+
+
+def test_best_without_overfitting_passes_over_the_best_score_when_it_overfits(rng):
+    table, folds = _synthetic_cv(rng, {("rfe_clas", 800): (0.50, 0.30),  # best score, large gap
+                                       ("clas", 600): (0.495, 0.10),     # about as good, small gap
+                                       ("clas", 50): (0.20, 0.05)})      # smallest gap, clearly worse
+    report = best_without_overfitting(table, folds).set_index(["FS", "ndes"])
+    assert not report.loc[("clas", 50), "competitive"]
+    assert report.loc[("rfe_clas", 800), "overfits"]
+    assert _check_choice(report.reset_index())["FS"] == "clas"
+    assert report.loc[("clas", 600), "chosen"]
+
+
+def test_best_without_overfitting_keeps_the_best_score_when_gaps_are_alike(rng):
+    table, folds = _synthetic_cv(rng, {("rfe_clas", 800): (0.50, 0.10), ("clas", 600): (0.49, 0.10)})
+    report = best_without_overfitting(table, folds)
+    assert _check_choice(report)["FS"] == "rfe_clas"
+
+
+def test_best_without_overfitting_on_feature_selection_cv(rng):
+    X, y = _binary_features(rng, n=150, informative=5, noise=40)
+    configs = [("clas", 5), ("clas", 20), ("rfe_clas", 5), ("rfe_clas", 20)]
+    table, folds = feature_selection_cv(X, y, configs, n_splits=3, n_repeats=3, rs=0, return_folds=True)
+    report = best_without_overfitting(table, folds, metric="F2")
+    assert report["chosen"].sum() == 1
+    chosen = report[report["chosen"]].iloc[0]
+    assert chosen["competitive"] and not chosen["overfits"]
+    assert {"F2_train", "gap", "p_below_best", "p_overfits"} <= set(report.columns)
+    assert report["F2"].is_monotonic_decreasing
 
 
 def test_data_prep_unknown_fs_raises(dataset_csv):

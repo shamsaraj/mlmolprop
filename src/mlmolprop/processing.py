@@ -428,6 +428,24 @@ def _fit_selector(X_train, y_train, FS: str, ndes):
 _CV_FS = ("clas", "rfe_clas", "enet_clas")
 
 
+def _class_scores(truth, pred, positive) -> dict:
+    """:func:`feature_selection_cv`'s classification metrics for one set of predictions."""
+    from sklearn.metrics import confusion_matrix, fbeta_score, matthews_corrcoef
+
+    truth, pred = np.asarray(truth), np.asarray(pred)
+    tn, fp, fn, tp = confusion_matrix(
+        truth == positive, pred == positive, labels=[False, True]
+    ).ravel()
+    return {
+        "F2": fbeta_score(truth == positive, pred == positive, beta=2, zero_division=0),
+        "MCC": matthews_corrcoef(truth, pred),
+        "recall": tp / (tp + fn) if tp + fn else 0.0,
+        "specificity": tn / (tn + fp) if tn + fp else 0.0,
+        "precision": tp / (tp + fp) if tp + fp else 0.0,
+        "accuracy": (tp + tn) / len(truth),
+    }
+
+
 def feature_selection_cv(
     X,
     y,
@@ -438,7 +456,8 @@ def feature_selection_cv(
     n_splits: int = 5,
     n_repeats: int = 1,
     rs: int | None = None,
-) -> pd.DataFrame:
+    return_folds: bool = False,
+):
     """Cross-validate feature-selection settings, refitting the selection inside every fold.
 
     Choosing a feature count (or a selection method) by cross-validation is
@@ -479,18 +498,26 @@ def feature_selection_cv(
         shuffles.
     rs : int or None
         Seeds the folds.
+    return_folds : bool, default False
+        Also return every fold's scores, on its held-out rows and on its own
+        training rows -- what :func:`best_without_overfitting` needs to
+        judge overfitting.
 
     Returns
     -------
-    pandas.DataFrame
+    pandas.DataFrame, or (pandas.DataFrame, pandas.DataFrame) with ``return_folds``
         One row per configuration, in the given order: ``FS``, ``ndes``,
         ``n_features`` (features kept, averaged over folds), and from the
         pooled out-of-fold predictions of each repeat, averaged over the
         repeats: ``F2`` (recall weighted twice as much as precision), ``MCC``,
-        ``recall``, ``specificity``, ``precision`` and ``accuracy``.
+        ``recall``, ``specificity``, ``precision`` and ``accuracy``. With
+        ``return_folds``, also one row per configuration and fold: ``FS``,
+        ``ndes``, ``repeat``, ``fold`` (numbered across repeats),
+        ``n_features``, the same metrics on the fold's held-out rows, and
+        each again on the fold's training rows (``F2_train``,
+        ``MCC_train``, ...).
     """
     from sklearn.base import clone
-    from sklearn.metrics import confusion_matrix, fbeta_score, matthews_corrcoef
     from sklearn.model_selection import RepeatedStratifiedKFold
     from sklearn.naive_bayes import ComplementNB
 
@@ -506,6 +533,7 @@ def feature_selection_cv(
     folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=rs)
     predicted = {c: np.empty((n_repeats, len(y)), dtype=y.dtype) for c in configs}
     kept = {c: [] for c in configs}
+    fold_rows = []
     for i, (train, held_out) in enumerate(folds.split(X, y)):
         X_train, X_held, y_train = X.iloc[train], X.iloc[held_out], y[train]
         columns = X_train.columns[VarianceThreshold(vt).fit(X_train).get_support()]
@@ -523,26 +551,146 @@ def feature_selection_cv(
             else:
                 mask = _fit_selector(X_train, y_train, fs, ndes).get_support()
             fitted = clone(model).fit(X_train.loc[:, mask], y_train)
-            predicted[fs, ndes][i // n_splits, held_out] = fitted.predict(X_held.loc[:, mask])
+            held_pred = fitted.predict(X_held.loc[:, mask])
+            predicted[fs, ndes][i // n_splits, held_out] = held_pred
             kept[fs, ndes].append(int(mask.sum()))
-
-    def scores(pred):
-        tn, fp, fn, tp = confusion_matrix(y == positive, pred == positive, labels=[False, True]).ravel()
-        return {
-            "F2": fbeta_score(y == positive, pred == positive, beta=2, zero_division=0),
-            "MCC": matthews_corrcoef(y, pred),
-            "recall": tp / (tp + fn) if tp + fn else 0.0,
-            "specificity": tn / (tn + fp) if tn + fp else 0.0,
-            "precision": tp / (tp + fp) if tp + fp else 0.0,
-            "accuracy": (tp + tn) / len(y),
-        }
+            if return_folds:
+                train_scores = _class_scores(y_train, fitted.predict(X_train.loc[:, mask]), positive)
+                fold_rows.append({
+                    "FS": fs, "ndes": ndes, "repeat": i // n_splits, "fold": i,
+                    "n_features": int(mask.sum()),
+                    **_class_scores(y[held_out], held_pred, positive),
+                    **{f"{k}_train": v for k, v in train_scores.items()},
+                })
 
     rows = []
     for fs, ndes in configs:
-        per_repeat = pd.DataFrame([scores(p) for p in predicted[fs, ndes]])
+        per_repeat = pd.DataFrame([_class_scores(y, p, positive) for p in predicted[fs, ndes]])
         rows.append({"FS": fs, "ndes": ndes, "n_features": float(np.mean(kept[fs, ndes])),
                      **per_repeat.mean().to_dict()})
-    return pd.DataFrame(rows)
+    table = pd.DataFrame(rows)
+    return (table, pd.DataFrame(fold_rows)) if return_folds else table
+
+
+def corrected_resampled_ttest(a, b=None, n_splits: int = 5, alternative: str = "two-sided"):
+    """Paired t-test across the folds of repeated k-fold cross-validation, corrected for their overlap.
+
+    Folds of a cross-validation share most of their training rows, so their
+    scores are correlated, and a plain paired t-test across them is badly
+    overconfident. The corrected resampled t-test (Nadeau and Bengio, 2003;
+    for repeated k-fold cross-validation, Bouckaert and Frank, 2004) inflates
+    the variance of the mean difference from ``s**2 / J`` to
+    ``(1 / J + n_test / n_train) * s**2``, with ``J`` the number of folds and
+    ``n_test / n_train = 1 / (n_splits - 1)``.
+
+    Parameters
+    ----------
+    a, b : array-like
+        Two models' scores on the same folds, in the same order; with
+        ``b=None``, ``a`` holds the per-fold differences.
+    n_splits : int, default 5
+        Folds per repeat (the k of k-fold cross-validation).
+    alternative : {"two-sided", "greater", "less"}
+        The alternative hypothesis for the mean of ``a - b``.
+
+    Returns
+    -------
+    (float, float)
+        The t statistic and its p-value, on ``J - 1`` degrees of freedom.
+        Identical scores give ``t = 0``.
+    """
+    from scipy import stats
+
+    d = np.asarray(a, dtype=float) - (0.0 if b is None else np.asarray(b, dtype=float))
+    if d.size < 2:
+        raise ValueError("Need the scores of at least two folds")
+    if alternative not in ("two-sided", "greater", "less"):
+        raise ValueError(f"alternative must be 'two-sided', 'greater' or 'less', got {alternative!r}")
+    var = d.var(ddof=1)
+    if var == 0:
+        t = 0.0 if d.mean() == 0 else float(np.copysign(np.inf, d.mean()))
+    else:
+        t = float(d.mean() / np.sqrt((1 / d.size + 1 / (n_splits - 1)) * var))
+    dist = stats.t(d.size - 1)
+    p = {"two-sided": 2 * dist.sf(abs(t)), "greater": dist.sf(t), "less": dist.cdf(t)}[alternative]
+    return t, float(min(p, 1.0))
+
+
+def _setting_key(frame: pd.DataFrame) -> pd.Series:
+    """One label per (FS, ndes), with ndes=None/NaN as "all"."""
+    ndes = frame["ndes"].map(lambda n: "all" if pd.isna(n) else str(int(n)))
+    return frame["FS"].astype(str) + " " + ndes
+
+
+def best_without_overfitting(
+    table: pd.DataFrame, folds: pd.DataFrame, metric: str = "MCC", alpha: float = 0.05
+) -> pd.DataFrame:
+    """Choose a feature-selection setting: the best cross-validated score that does not overfit.
+
+    Takes :func:`feature_selection_cv`'s ``table`` and ``folds``
+    (``return_folds=True``). A setting's overfitting is its gap: ``metric``
+    on each fold's own training rows minus on its held-out rows, averaged
+    over the folds. Every model fits its training rows better than unseen
+    ones, so the gaps are compared, not tested against zero:
+
+    1. competitive: the settings whose held-out ``metric`` is not
+       significantly below the best setting's (one-sided
+       :func:`corrected_resampled_ttest` on the per-fold scores, ``alpha``);
+    2. the reference gap: the smallest gap among the competitive settings;
+    3. overfitting: a gap significantly larger than the reference's
+       (one-sided test on the per-fold gaps, ``alpha``);
+    4. chosen: the competitive setting with the highest cross-validated
+       ``metric`` that does not overfit (ties: fewer features).
+
+    There is no multiple-testing correction: passing over a setting that
+    overfits is the costlier mistake, and whichever competitive setting is
+    chosen instead scores about as well.
+
+    Parameters
+    ----------
+    table, folds : pandas.DataFrame
+        :func:`feature_selection_cv` with ``return_folds=True``.
+    metric : str, default "MCC"
+        Any of its metrics: ``"MCC"``, ``"F2"``, ``"recall"``, ...
+    alpha : float, default 0.05
+        Significance level of both one-sided tests.
+
+    Returns
+    -------
+    pandas.DataFrame
+        ``table`` sorted by ``metric`` (best first, then fewer features),
+        with ``<metric>_train`` (mean over the folds), ``gap``,
+        ``p_below_best`` and ``competitive`` (step 1; ``p_below_best`` is
+        NaN for the best itself), ``p_overfits`` and ``overfits`` (step 3;
+        NaN and False for the reference itself) and ``chosen``, True on
+        exactly one row.
+    """
+    folds = folds.assign(setting=_setting_key(folds), gap=folds[f"{metric}_train"] - folds[metric])
+    n_splits = int(folds.groupby("repeat")["fold"].nunique().max())
+    held = folds.pivot(index="fold", columns="setting", values=metric)
+    gaps = folds.pivot(index="fold", columns="setting", values="gap")
+
+    out = table.assign(setting=_setting_key(table))
+    out[f"{metric}_train"] = out["setting"].map(folds.groupby("setting")[f"{metric}_train"].mean())
+    out["gap"] = out["setting"].map(gaps.mean())
+    out = out.sort_values([metric, "n_features"], ascending=[False, True], kind="stable")
+
+    best = out["setting"].iloc[0]
+    out["p_below_best"] = [
+        np.nan if s == best else corrected_resampled_ttest(held[best], held[s], n_splits, "greater")[1]
+        for s in out["setting"]
+    ]
+    out["competitive"] = (out["setting"] == best) | (out["p_below_best"] >= alpha)
+    reference = out.loc[out["competitive"], "gap"].idxmin()
+    ref = out.loc[reference, "setting"]
+    out["p_overfits"] = [
+        np.nan if s == ref else corrected_resampled_ttest(gaps[s], gaps[ref], n_splits, "greater")[1]
+        for s in out["setting"]
+    ]
+    out["overfits"] = out["p_overfits"] < alpha
+    out["chosen"] = False
+    out.loc[out.index[out["competitive"] & ~out["overfits"]][0], "chosen"] = True
+    return out.drop(columns="setting")
 
 
 def scaffold_split(names, smiles, test_size: float = 0.2, rs: int | None = None):

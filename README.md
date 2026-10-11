@@ -116,6 +116,16 @@ configs.append(("enet_clas", None))  # every feature the elastic net keeps
 table = feature_selection_cv(X_train, y_train, configs, n_repeats=3, rs=1)  # F2, MCC, recall, ...
 ```
 
+To take the best score only from settings that don't overfit, score every fold on its own
+training rows too and compare the train-minus-held-out gaps (corrected resampled t-tests):
+```python
+from mlmolprop import best_without_overfitting
+
+table, folds = feature_selection_cv(X_train, y_train, configs, n_repeats=3, rs=1, return_folds=True)
+report = best_without_overfitting(table, folds, metric="MCC")  # gap, p-values, competitive, overfits
+chosen = report[report["chosen"]].iloc[0]
+```
+
 ### 4. Build and Evaluate Models
 ```python
 from mlmolprop import Model
