@@ -684,12 +684,15 @@ def test_data_prep_fs_enet_clas_selects_features(fs_dataset_csv):
 def test_data_prep_fs_enet_clas_without_fixed_k_keeps_every_nonzero_coefficient(fs_dataset_csv):
     # ndes=None keeps every feature the penalty leaves non-zero -- not just the
     # above-average ones, SelectFromModel's default for an elastic net
-    from sklearn.linear_model import LogisticRegression
+    # (the reference is built the way data_prep builds it: before scikit-learn 1.8
+    # LogisticRegression(l1_ratio=0.5) alone is an L2 fit, which zeroes nothing out)
+    from mlmolprop.processing import _elastic_net
 
     kwargs = {"TARGET": "y_clas", "REMOVE": ["y_reg"], "mod": "class", "ratio": 0.25, "rs": 0}
     X_train, y_train = data_prep(fs_dataset_csv, **kwargs)[:2]
-    coef = LogisticRegression(solver="saga", l1_ratio=0.5, max_iter=5000).fit(X_train, y_train).coef_
-    kept = data_prep(fs_dataset_csv, FS="enet_clas", ndes=None, **kwargs)[4]
+    seeded = {"random_state": 0}  # saga shuffles: the same seed gives the same coefficients
+    coef = _elastic_net("clas", seeded).fit(X_train, y_train).coef_
+    kept = data_prep(fs_dataset_csv, FS="enet_clas", ndes=None, enet_params=seeded, **kwargs)[4]
     assert len(kept) == int((np.abs(coef) > 1e-5).sum())
 
 
