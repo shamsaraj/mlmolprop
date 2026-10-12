@@ -860,6 +860,27 @@ def test_best_without_overfitting_n_splits_sets_the_correction(rng):
     assert corrected.loc[("rfe_clas", 800), "p_overfits"] > inferred.loc[("rfe_clas", 800), "p_overfits"]
 
 
+def test_best_without_overfitting_max_gap_limits_the_gap_share(rng):
+    # The best score overfits by 40% of its training score; the significance
+    # steps alone keep it (every setting overfits alike), the limit does not.
+    settings = {("clas", 800): (0.50, 0.33), ("clas", 600): (0.48, 0.32), ("clas", 100): (0.40, 0.08)}
+    table, folds = _synthetic_cv(rng, settings)
+    alone = best_without_overfitting(table, folds).set_index(["FS", "ndes"])
+    assert not alone.loc[("clas", 100), "competitive"]
+    limited = best_without_overfitting(table, folds, max_gap=0.2).set_index(["FS", "ndes"])
+    assert {"gap_share", "within_max_gap"} <= set(limited.columns)
+    assert not limited.loc[("clas", 800), "within_max_gap"] and not limited.loc[("clas", 800), "competitive"]
+    assert limited.loc[("clas", 100), "chosen"]
+    assert limited.loc[limited["chosen"], "gap_share"].iloc[0] <= 0.2
+
+
+def test_best_without_overfitting_max_gap_chooses_nothing_when_nothing_qualifies(rng):
+    table, folds = _synthetic_cv(rng, {("clas", 800): (0.50, 0.33), ("clas", 600): (0.48, 0.32)})
+    report = best_without_overfitting(table, folds, max_gap=0.2)
+    assert not report["chosen"].any() and not report["within_max_gap"].any()
+    assert len(report) == 2
+
+
 def test_best_without_overfitting_on_feature_selection_cv(rng):
     X, y = _binary_features(rng, n=150, informative=5, noise=40)
     configs = [("clas", 5), ("clas", 20), ("rfe_clas", 5), ("rfe_clas", 20)]

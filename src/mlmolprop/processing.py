@@ -1082,6 +1082,7 @@ def best_without_overfitting(
     metric: str = "MCC",
     alpha: float = 0.05,
     n_splits: int | None = None,
+    max_gap: float | None = None,
 ) -> pd.DataFrame:
     """Choose a feature-selection setting: the best cross-validated score that does not overfit.
 
@@ -1092,6 +1093,9 @@ def best_without_overfitting(
     over the folds. Every model fits its training rows better than unseen
     ones, so the gaps are compared, not tested against zero:
 
+    0. with ``max_gap``, only the settings whose gap is at most that share of
+       their training score are candidates (a limit on overfitting, set in
+       advance; the steps below then run among them);
     1. competitive: the settings whose held-out ``metric`` is not
        significantly below the best setting's (one-sided
        :func:`corrected_resampled_ttest` on the per-fold scores, ``alpha``);
@@ -1103,7 +1107,9 @@ def best_without_overfitting(
 
     There is no multiple-testing correction: passing over a setting that
     overfits is the costlier mistake, and whichever competitive setting is
-    chosen instead scores about as well.
+    chosen instead scores about as well. The steps compare settings with one
+    another, so on their own they still choose one when every setting
+    overfits; ``max_gap`` rules that out.
 
     Parameters
     ----------
@@ -1118,6 +1124,10 @@ def best_without_overfitting(
         repeat in ``folds``. Pass 5 for scores from 80:20 resplits (e.g.
         :func:`resplit_evaluation`'s, with each resplit as a ``fold`` and
         ``repeat`` set to 0).
+    max_gap : float, optional
+        The largest gap allowed, as a share of the training score: with 0.2,
+        a setting whose held-out ``metric`` is more than 20% below its
+        training ``metric`` is never chosen.
 
     Returns
     -------
@@ -1127,7 +1137,10 @@ def best_without_overfitting(
         ``p_below_best`` and ``competitive`` (step 1; ``p_below_best`` is
         NaN for the best itself), ``p_overfits`` and ``overfits`` (step 3;
         NaN and False for the reference itself) and ``chosen``, True on
-        exactly one row.
+        exactly one row. With ``max_gap``, also ``gap_share`` (the gap over
+        the training score) and ``within_max_gap``; a setting beyond it is
+        never competitive, and when no setting is within it ``chosen`` is
+        False on every row.
     """
     folds = folds.assign(setting=_setting_key(folds), gap=folds[f"{metric}_train"] - folds[metric])
     if n_splits is None:
@@ -1140,12 +1153,23 @@ def best_without_overfitting(
     out["gap"] = out["setting"].map(gaps.mean())
     out = out.sort_values([metric, "n_features"], ascending=[False, True], kind="stable")
 
-    best = out["setting"].iloc[0]
+    eligible = pd.Series(True, index=out.index)
+    if max_gap is not None:
+        train = out[f"{metric}_train"]
+        out["gap_share"] = (out["gap"] / train).where(train > 0)
+        out["within_max_gap"] = out["gap_share"] <= max_gap
+        eligible = out["within_max_gap"]
+        if not eligible.any():
+            return out.drop(columns="setting").assign(
+                p_below_best=np.nan, competitive=False, p_overfits=np.nan, overfits=False, chosen=False
+            )
+
+    best = out.loc[eligible, "setting"].iloc[0]
     out["p_below_best"] = [
         np.nan if s == best else corrected_resampled_ttest(held[best], held[s], n_splits, "greater")[1]
         for s in out["setting"]
     ]
-    out["competitive"] = (out["setting"] == best) | (out["p_below_best"] >= alpha)
+    out["competitive"] = eligible & ((out["setting"] == best) | (out["p_below_best"] >= alpha))
     reference = out.loc[out["competitive"], "gap"].idxmin()
     ref = out.loc[reference, "setting"]
     out["p_overfits"] = [
