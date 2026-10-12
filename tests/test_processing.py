@@ -14,9 +14,13 @@ from mlmolprop.processing import (
     feature_selection_cv,
     file2list,
     file2object,
+    holdout_scores,
     list2file,
     object2file,
+    paired_comparison,
+    resplit_evaluation,
     scaffold_split,
+    select_features,
 )
 
 
@@ -843,6 +847,16 @@ def test_best_without_overfitting_keeps_the_best_score_when_gaps_are_alike(rng):
     assert _check_choice(report)["FS"] == "rfe_clas"
 
 
+def test_best_without_overfitting_n_splits_sets_the_correction(rng):
+    # One repeat of many resplits: the inferred n_splits would be the number of
+    # resplits; passing 5 gives the 80:20 correction, a more cautious test.
+    table, folds = _synthetic_cv(rng, {("rfe_clas", 800): (0.50, 0.14), ("clas", 600): (0.495, 0.10)},
+                                 n_splits=20, n_repeats=1)
+    inferred = best_without_overfitting(table, folds).set_index(["FS", "ndes"])
+    corrected = best_without_overfitting(table, folds, n_splits=5).set_index(["FS", "ndes"])
+    assert corrected.loc[("rfe_clas", 800), "p_overfits"] > inferred.loc[("rfe_clas", 800), "p_overfits"]
+
+
 def test_best_without_overfitting_on_feature_selection_cv(rng):
     X, y = _binary_features(rng, n=150, informative=5, noise=40)
     configs = [("clas", 5), ("clas", 20), ("rfe_clas", 5), ("rfe_clas", 20)]
@@ -853,6 +867,191 @@ def test_best_without_overfitting_on_feature_selection_cv(rng):
     assert chosen["competitive"] and not chosen["overfits"]
     assert {"F2_train", "gap", "p_below_best", "p_overfits"} <= set(report.columns)
     assert report["F2"].is_monotonic_decreasing
+
+
+def test_elastic_net_zeroes_out_noise_features(rng):
+    # A real elastic net, whatever the scikit-learn version: before 1.8 a
+    # LogisticRegression ignores l1_ratio unless the penalty is named, and an
+    # L2 penalty zeroes nothing out.
+    X, y = _binary_features(rng, n=150, informative=3, noise=60)
+    kept = select_features(X, y, "enet_clas", None, cor=None, enet_params={"C": 0.1, "random_state": 0})
+    assert 0 < len(kept) < X.shape[1]
+
+
+def test_enet_params_reach_the_elastic_net(rng, cwd_tmp_path):
+    X, y = _binary_features(rng, n=150, informative=3, noise=60)
+    strong = select_features(X, y, "enet_clas", None, cor=None, enet_params={"C": 0.05, "random_state": 0})
+    weak = select_features(X, y, "enet_clas", None, cor=None, enet_params={"C": 10, "random_state": 0})
+    assert len(strong) < len(weak)
+    # the same settings through data_prep
+    df = X.assign(name=[f"m{i}" for i in range(len(X))], y=y)
+    df.to_csv("enet.csv", index=False)
+    kwargs = {"TARGET": "y", "mod": "class", "ratio": 0.2, "rs": 0, "FS": "enet_clas", "ndes": None}
+    few = data_prep("enet.csv", enet_params={"C": 0.05, "random_state": 0}, **kwargs)[4]
+    many = data_prep("enet.csv", enet_params={"C": 10, "random_state": 0}, **kwargs)[4]
+    assert len(few) < len(many)
+
+
+def test_select_features_matches_data_prep(rng, cwd_tmp_path):
+    X, y = _binary_features(rng, n=150, informative=4, noise=30)
+    X["copy"] = X["i0"]  # dropped by the correlation filter
+    X["constant"] = 1  # dropped by the variance filter
+    df = X.assign(name=[f"m{i}" for i in range(len(X))], y=y)
+    df.to_csv("fs.csv", index=False)
+    X_train, y_train, _, _, v_names = data_prep("fs.csv", TARGET="y", mod="class", ratio=0.2, rs=0,
+                                                Cor="on", FS="clas", ndes=10)[:5]
+    full = df.drop(columns=["name", "y"]).loc[X_train.index]
+    assert select_features(full, y_train, "clas", 10) == list(v_names)
+    kept = select_features(full, y_train)  # the filters alone
+    assert "constant" not in kept and not {"copy", "i0"} <= set(kept)
+    assert len(kept) == X.shape[1] - 2
+
+
+def test_select_features_warns_when_the_elastic_net_does_not_converge(rng):
+    from sklearn.exceptions import ConvergenceWarning
+
+    X, y = _binary_features(rng, n=100, informative=3, noise=20)
+    with pytest.warns(ConvergenceWarning):
+        select_features(X, y, "enet_clas", 5, enet_params={"max_iter": 1, "random_state": 0})
+
+
+def test_feature_selection_cv_compares_several_models_on_shared_selections(rng):
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.naive_bayes import BernoulliNB, ComplementNB
+
+    X, y = _binary_features(rng, n=150, informative=5, noise=25)
+    configs = [("clas", 5), ("rfe_clas", 8), ("off", None)]
+    models = {"cnb": ComplementNB(), "bnb": BernoulliNB(), "lr": LogisticRegression(max_iter=1000)}
+    table, folds = feature_selection_cv(X, y, configs, model=models, n_splits=3, n_repeats=2, rs=0,
+                                        return_folds=True)
+    assert list(table["model"]) == [m for m in models for _ in configs]
+    assert len(folds) == len(models) * len(configs) * 6
+    # every model sees the same selection in every fold
+    assert folds.groupby(["FS", "ndes", "fold"], dropna=False)["n_features"].nunique().eq(1).all()
+    off = table[table["FS"] == "off"]
+    assert off["n_features"].eq(X.shape[1]).all() and off["ndes"].isna().all()
+    # a model in a dict scores as it does on its own
+    alone = feature_selection_cv(X, y, configs, model=ComplementNB(), n_splits=3, n_repeats=2, rs=0)
+    pd.testing.assert_frame_equal(table[table["model"] == "cnb"].drop(columns="model").reset_index(drop=True),
+                                  alone)
+    report = best_without_overfitting(table, folds, metric="F2")
+    assert report["chosen"].sum() == 1
+    assert report.groupby(["model", "FS", "ndes"], dropna=False).size().eq(1).all()
+
+
+def test_feature_selection_cv_reports_pr_auc(rng):
+    from sklearn.svm import LinearSVC
+
+    X, y = _binary_features(rng, n=150, informative=5, noise=25)
+    table, folds = feature_selection_cv(X, y, [("clas", 5)], model={"svm": LinearSVC()}, n_splits=3,
+                                        rs=0, return_folds=True)
+    assert table["PR_AUC"].between(0, 1).all()
+    assert table.loc[0, "PR_AUC"] > np.mean(y) + 0.2  # well above a random ranking's
+    assert {"PR_AUC", "PR_AUC_train"} <= set(folds.columns)
+
+
+def test_feature_selection_cv_counts_unconverged_elastic_nets(rng):
+    X, y = _binary_features(rng, n=100, informative=3, noise=20)
+    configs = [("enet_clas", 5), ("enet_clas", 10), ("clas", 5)]
+    table = feature_selection_cv(X, y, configs, n_splits=3, rs=0, enet_params={"max_iter": 1, "random_state": 0})
+    assert list(table["unconverged"][:2]) == [3, 3] and pd.isna(table["unconverged"][2])
+    plain = feature_selection_cv(X, y, [("clas", 5)], n_splits=3, rs=0)
+    assert "unconverged" not in plain.columns
+
+
+def test_feature_selection_cv_with_a_weak_penalty_keeps_distinct_counts(rng):
+    X, y = _binary_features(rng, n=150, informative=5, noise=60)
+    configs = [("enet_clas", k) for k in (5, 10, 20, 40)]
+    table = feature_selection_cv(X, y, configs, n_splits=3, rs=0, enet_params={"C": 100, "random_state": 0})
+    assert list(table["n_features"]) == [5, 10, 20, 40]
+
+
+def test_feature_selection_cv_memory_reuses_fits(rng, tmp_path):
+    X, y = _binary_features(rng, n=120, informative=4, noise=30)
+    configs = [("enet_clas", 5), ("off", None)]
+    params = {"C": 1, "random_state": 0}
+    first = feature_selection_cv(X, y, configs, n_splits=3, rs=0, enet_params=params, memory=tmp_path)
+    assert any(tmp_path.rglob("output.pkl"))  # joblib stored the fits
+    again = feature_selection_cv(X, y, configs, n_splits=3, rs=0, enet_params=params, memory=tmp_path)
+    pd.testing.assert_frame_equal(first, again)
+
+
+def test_resplit_evaluation_scores_every_resplit(rng):
+    from sklearn.naive_bayes import ComplementNB
+
+    X, y = _binary_features(rng, n=150, informative=5, noise=25)
+    scores, importances = resplit_evaluation(X, y, ComplementNB(), "clas", 8, n_resplits=12, rs=0)
+    assert list(scores["resplit"]) == list(range(12)) and (scores["n_features"] == 8).all()
+    assert scores[["F2", "recall", "precision", "PR_AUC", "F2_train"]].stack().between(0, 1).all()
+    assert scores["MCC"].mean() > 0.3
+    assert importances.shape == (12, X.shape[1])
+    assert importances.notna().sum(axis=1).eq(8).all()  # NaN where a resplit did not keep a feature
+    again, _ = resplit_evaluation(X, y, ComplementNB(), "clas", 8, n_resplits=12, rs=0)
+    pd.testing.assert_frame_equal(scores, again)
+
+
+def test_resplit_evaluation_shuffled_labels_score_at_chance(rng):
+    from sklearn.naive_bayes import ComplementNB
+
+    X, y = _binary_features(rng, n=150, informative=5, noise=25)
+    real, _ = resplit_evaluation(X, y, ComplementNB(), "clas", 8, n_resplits=10, rs=0, importance=False)
+    shuffled, none = resplit_evaluation(X, y, ComplementNB(), "clas", 8, n_resplits=10, rs=0,
+                                        shuffle_labels=True, importance=False)
+    assert none is None
+    assert abs(shuffled["MCC"].mean()) < 0.2 < real["MCC"].mean()
+
+
+def test_resplit_evaluation_reports_elastic_net_convergence(rng):
+    from sklearn.naive_bayes import ComplementNB
+
+    X, y = _binary_features(rng, n=100, informative=3, noise=20)
+    scores, _ = resplit_evaluation(X, y, ComplementNB(), "enet_clas", 5, n_resplits=3, rs=0,
+                                   enet_params={"max_iter": 1, "random_state": 0}, importance=False)
+    assert not scores["converged"].any()
+
+
+def test_paired_comparison_verdicts(rng):
+    base = rng.normal(0.6, 0.05, size=50)
+    scores = pd.DataFrame({
+        "best": base + 0.10 + rng.normal(0, 0.01, 50),
+        "same": base + 0.10 + rng.normal(0, 0.01, 50),
+        "worse": base + rng.normal(0, 0.01, 50),
+        "noisy": base + 0.10 + rng.normal(0, 0.3, 50),
+    })
+    table = paired_comparison(scores, reference="best", margin=0.05)
+    assert table.loc["best", "verdict"] == "reference" and pd.isna(table.loc["best", "p"])
+    assert table.loc["same", "verdict"] == "equivalent"
+    assert table.loc["worse", "verdict"] == "worse"
+    assert table.loc["noisy", "verdict"] == "inconclusive"
+    assert (table["low"] <= table["difference"]).all() and (table["difference"] <= table["high"]).all()
+    assert paired_comparison(scores).index[0] in ("best", "same", "noisy")  # default reference: highest mean
+    # the interval matches the corrected test: 0 inside it exactly when p >= alpha
+    for model in ("same", "worse", "noisy"):
+        row = table.loc[model]
+        assert (row["low"] <= 0 <= row["high"]) == (row["p"] >= 0.05)
+
+
+def test_holdout_scores_known_counts():
+    from scipy.stats import beta
+
+    truth = np.array([1] * 30 + [0] * 170)
+    predicted = np.array([1] * 24 + [0] * 6 + [1] * 26 + [0] * 144)
+    table = holdout_scores(truth, predicted, rs=0)
+    assert table.loc["recall", "count"] == "24/30" and table.loc["recall", "value"] == pytest.approx(0.8)
+    # the exact (Clopper-Pearson) interval
+    assert table.loc["recall", "low"] == pytest.approx(beta.ppf(0.025, 24, 7))
+    assert table.loc["recall", "high"] == pytest.approx(beta.ppf(0.975, 25, 6))
+    assert table.loc["precision", "count"] == "24/50"
+    assert (table["low"] <= table["value"]).all() and (table["value"] <= table["high"]).all()
+    assert table.loc["F2", "interval"] == "bootstrap" and "PR_AUC" not in table.index
+
+
+def test_holdout_scores_pr_auc(rng):
+    truth = np.array([1] * 30 + [0] * 170)
+    scores = truth + rng.normal(0, 0.6, size=200)
+    table = holdout_scores(truth, (scores > 0.5).astype(int), scores=scores, n_boot=300, rs=0)
+    assert table.loc["PR_AUC", "low"] <= table.loc["PR_AUC", "value"] <= table.loc["PR_AUC", "high"]
+    assert table.loc["PR_AUC", "value"] > 0.6
 
 
 def test_data_prep_unknown_fs_raises(dataset_csv):

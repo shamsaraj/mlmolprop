@@ -15,6 +15,8 @@ compared, filtered or combined:
    :func:`stable_features` keeps the features that clear a signal-to-noise
    threshold, per direction, optionally requiring a minimum number of
    compounds that carry the feature.
+   :func:`selection_stability` measures how much the top features of refits
+   on different data (resplits, resamples) agree.
 3. **Consensus.** :func:`consensus_features` counts how many methods rank each
    feature in their own top ``top_n``, per direction.
 
@@ -1040,6 +1042,87 @@ def consensus_features(
     return out.sort_values(
         ["direction", "n_agree", "mean_rank"], ascending=[False, False, True], kind="stable"
     )
+
+
+def selection_stability(importances, top_n: int = 30, signed: bool | None = None,
+                        n_features: int | None = None):
+    """How reproducible a model's top features are across refits on different data.
+
+    Each refit (a resplit or a resample) contributes its own top ``top_n``
+    features per direction -- the largest positive and the most negative
+    importances when they are signed, the largest otherwise. Two refits that
+    list the same features agree; the agreement is averaged over every pair
+    of refits.
+
+    Parameters
+    ----------
+    importances : pandas.DataFrame
+        One row per refit, one column per feature: each refit's importance of
+        the features it kept, NaN for the ones it did not (as returned by
+        :func:`mlmolprop.processing.resplit_evaluation`).
+    top_n : int, default 30
+        Length of each refit's list per direction.
+    signed : bool, optional
+        Whether the importances carry a direction. Defaults to whether any
+        is negative (tree importances never are).
+    n_features : int, optional
+        The pool the lists are drawn from, for the Kuncheva index. Defaults
+        to the number of columns.
+
+    Returns
+    -------
+    (pandas.DataFrame, pandas.DataFrame)
+        Per feature that at least one refit kept (index ``feature``): ``direction`` (+1 or -1 by the sign
+        of its mean, 0 for magnitude-only importances), ``selected`` (the
+        fraction of refits that kept it), ``top`` (the fraction that put it
+        in their list on that side), ``mean`` and ``std`` over every refit
+        (0 where it was not kept) and ``stability``, ``|mean| / std``; sorted
+        by ``top``, then ``stability``. Per direction (index ``direction``):
+        ``top_n``, ``n_features`` (the pool), ``jaccard`` (overlap over
+        union) and ``kuncheva`` (overlap corrected for chance, Kuncheva
+        2007: 1 = identical lists, about 0 = no better than random picks),
+        each the mean over all pairs of refits. A refit with fewer than
+        ``top_n`` features on one side contributes a shorter list.
+    """
+    values = pd.DataFrame(importances).astype(float)
+    if len(values) < 2:
+        raise ValueError("Need at least two refits")
+    signed = bool((values < 0).any().any()) if signed is None else signed
+    pool = values.shape[1] if n_features is None else n_features
+    if not 0 < top_n < pool:
+        raise ValueError(f"top_n must be between 1 and the pool size - 1 ({pool - 1}), got {top_n}")
+    filled = values.fillna(0.0)
+    mean, std = filled.mean(), filled.std(ddof=1)
+    direction = np.sign(mean).astype(int) if signed else pd.Series(0, index=values.columns)
+
+    sides = {1: values.where(values > 0), -1: -values.where(values < 0)} if signed else {0: values}
+    top = pd.Series(0.0, index=values.columns)
+    summary = []
+    for side, score in sides.items():
+        # each refit's top_n on this side: rank 1 = largest
+        member = score.rank(axis=1, ascending=False, method="first").le(top_n).to_numpy(dtype=float)
+        top += pd.Series(member.mean(axis=0), index=values.columns).where(direction == side, 0.0)
+        overlap = member @ member.T
+        sizes = member.sum(axis=1)
+        i, j = np.triu_indices(len(member), k=1)
+        union = sizes[i] + sizes[j] - overlap[i, j]
+        jaccard = np.where(union > 0, overlap[i, j] / np.where(union > 0, union, 1), 1.0)
+        kuncheva = (overlap[i, j] * pool - top_n**2) / (top_n * (pool - top_n))
+        summary.append({"direction": side, "top_n": top_n, "n_features": pool,
+                        "jaccard": float(jaccard.mean()), "kuncheva": float(kuncheva.mean())})
+
+    features = pd.DataFrame({
+        "direction": direction,
+        "selected": values.notna().mean(),
+        "top": top,
+        "mean": mean,
+        "std": std,
+        "stability": mean.abs() / (std + _EPS),
+    })
+    features.index.name = "feature"
+    features = features[features["selected"] > 0]  # a feature no refit kept says nothing
+    features = features.sort_values(["top", "stability"], ascending=False, kind="stable")
+    return features, pd.DataFrame(summary).set_index("direction")
 
 
 def _scores(table) -> pd.Series:

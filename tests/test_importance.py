@@ -813,3 +813,39 @@ def test_consensus_of_real_tables_selects_the_planted_features(bits_xy):
     }
     out = consensus_features(tables, top_n=1)
     assert out[out["selected"]]["direction"].to_dict() == {"b0": 1, "b1": -1}
+
+
+def test_selection_stability_identical_refits_agree_fully():
+    from mlmolprop import selection_stability
+
+    one = pd.Series(np.linspace(-1, 1, 40), index=[f"f{i}" for i in range(40)])
+    refits = pd.DataFrame([one] * 5).reset_index(drop=True)
+    features, summary = selection_stability(refits, top_n=5)
+    assert list(summary.index) == [1, -1]
+    assert np.allclose(summary[["jaccard", "kuncheva"]], 1.0)
+    top_up = features[features["direction"] == 1].head(5)
+    assert set(top_up.index) == {f"f{i}" for i in range(35, 40)} and (top_up["top"] == 1).all()
+
+
+def test_selection_stability_random_refits_agree_at_chance(rng):
+    from mlmolprop import selection_stability
+
+    refits = pd.DataFrame(rng.random((60, 200)))
+    _, summary = selection_stability(refits, top_n=10)
+    assert list(summary.index) == [0]  # never negative: magnitude only
+    assert abs(summary.loc[0, "kuncheva"]) < 0.05
+    assert summary.loc[0, "jaccard"] < 0.1
+
+
+def test_selection_stability_counts_unkept_features_as_zero(rng):
+    from mlmolprop import selection_stability
+
+    refits = pd.DataFrame({"always": [1.0, 1.1, 0.9, 1.0], "half": [2.0, np.nan, 2.0, np.nan],
+                           "other": [0.1, 0.2, 0.1, 0.2], "x": [0.05, 0.1, 0.05, 0.1]})
+    features, _ = selection_stability(refits.assign(never=np.nan), top_n=1)
+    assert "never" not in features.index
+    assert features.loc["always", "selected"] == 1 and features.loc["half", "selected"] == 0.5
+    assert features.loc["half", "mean"] == pytest.approx(1.0)  # 2, 0, 2, 0
+    assert features.loc["always", "stability"] > features.loc["half", "stability"]
+    with pytest.raises(ValueError):
+        selection_stability(refits.head(1))

@@ -58,6 +58,7 @@ def data_prep(
     ratio=0.2,
     selection=None,
     mod="class",
+    enet_params=None,
 ):
     """Load a dataset and run it through the standard QSAR preprocessing pipeline.
 
@@ -180,6 +181,13 @@ def data_prep(
     mod : {"class", "reg"}
         Whether the train/test split is stratified by y (classification)
         or not (regression).
+    enet_params : dict or None
+        Settings of the elastic net behind ``FS="enet_clas"``/``"enet_reg"``,
+        over its defaults (``l1_ratio=0.5``; for classification a ``saga``
+        logistic regression with ``max_iter=5000``): e.g. ``C``,
+        ``l1_ratio``, ``class_weight``, ``random_state``, ``max_iter``,
+        ``tol``. A weaker penalty (larger ``C``) leaves more features
+        non-zero, which a large ``ndes`` needs.
 
     Returns
     -------
@@ -345,7 +353,7 @@ def data_prep(
         v_names = list(X_train.columns.values)
 
     if FS != "off":
-        selector = _fit_selector(X_train, y_train, FS, ndes)
+        selector = _fit_selector(X_train, y_train, FS, ndes, enet_params)
         if FS == "clas":
             # Must be the feature count SelectKBest actually tested just
             # now (X_train.shape[1]), not v_names2 -- that was fixed back
@@ -391,14 +399,71 @@ def data_prep(
 _NONZERO = 1e-5
 
 
-def _elastic_net(kind: str):
-    """The elastic-net estimator behind ``FS="enet_clas"``/``"enet_reg"``."""
+def _sklearn_older_than(major: int, minor: int) -> bool:
+    import re
+
+    import sklearn
+
+    found = re.match(r"(\d+)\.(\d+)", sklearn.__version__)
+    return (int(found[1]), int(found[2])) < (major, minor)
+
+
+def _elastic_net(kind: str, params: dict | None = None):
+    """The elastic-net estimator behind ``FS="enet_clas"``/``"enet_reg"``, ``params`` over its defaults."""
+    params = dict(params or {})
     if kind == "clas":
-        return LogisticRegression(solver="saga", l1_ratio=0.5, max_iter=5000)
-    return ElasticNet(l1_ratio=0.5)
+        settings = {"solver": "saga", "l1_ratio": 0.5, "max_iter": 5000, **params}
+        if "penalty" not in settings and _sklearn_older_than(1, 8):
+            # Before scikit-learn 1.8 the penalty defaults to "l2" and l1_ratio is
+            # ignored unless it is named; from 1.8 on, l1_ratio sets it.
+            settings["penalty"] = "elasticnet"
+        return LogisticRegression(**settings)
+    return ElasticNet(**{"l1_ratio": 0.5, **params})
 
 
-def _fit_selector(X_train, y_train, FS: str, ndes):
+def _fit_elastic_net(X, y, kind: str, params: dict | None = None):
+    """Fit :func:`_elastic_net` on ``(X, y)``: ``(fitted, converged)``.
+
+    The solver's ConvergenceWarning is caught and returned as ``converged``
+    instead of shown, so that a caller fitting many folds can count it; any
+    other warning is passed on.
+    """
+    import warnings
+
+    from sklearn.exceptions import ConvergenceWarning
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ConvergenceWarning)
+        fitted = _elastic_net(kind, params).fit(X, y)
+    converged = True
+    for w in caught:
+        if issubclass(w.category, ConvergenceWarning):
+            converged = False
+        else:
+            warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
+    return fitted, converged
+
+
+def _filter_columns(X: pd.DataFrame, vt: float = 0.0, cor: float | None = 0.9) -> pd.Index:
+    """The columns of ``X`` left by the variance filter and then the correlation filter."""
+    columns = X.columns[VarianceThreshold(vt).fit(X).get_support()]
+    if cor is not None:
+        columns = columns.drop(find_correlation(X[columns], cor))
+    return columns
+
+
+def _cached(memory, func):
+    """``func``, cached by ``memory`` (a directory or a joblib.Memory) when one is given."""
+    if memory is None:
+        return func
+    if not hasattr(memory, "cache"):
+        from joblib import Memory
+
+        memory = Memory(memory, verbose=0)
+    return memory.cache(func)
+
+
+def _fit_selector(X_train, y_train, FS: str, ndes, enet_params: dict | None = None):
     """Fit :func:`data_prep`'s feature selector ``FS``, keeping (up to) ``ndes`` features."""
     if FS == "clas":
         return SelectKBest(f_classif, k=ndes).fit(X_train, y_train)
@@ -420,12 +485,84 @@ def _fit_selector(X_train, y_train, FS: str, ndes):
         # Every feature the penalty doesn't zero out, capped at the ndes
         # largest |coefficients| (no cap with ndes=None).
         return SelectFromModel(
-            _elastic_net(FS[5:]), threshold=_NONZERO, max_features=ndes
+            _elastic_net(FS[5:], enet_params), threshold=_NONZERO, max_features=ndes
         ).fit(X_train, y_train)
     raise ValueError(f"Unknown FS: {FS!r}")
 
 
-_CV_FS = ("clas", "rfe_clas", "enet_clas")
+def select_features(
+    X,
+    y,
+    FS: str = "off",
+    ndes=None,
+    vt: float = 0.0,
+    cor: float | None = 0.9,
+    enet_params: dict | None = None,
+    memory=None,
+) -> list:
+    """Fit the variance filter, the correlation filter and a feature selection; the columns they keep.
+
+    The steps :func:`feature_selection_cv` refits in every fold (and
+    :func:`data_prep` runs with ``Cor="on"``), in the same order, fitted on
+    the rows given -- for refitting a chosen setting on a training set or on
+    every compound.
+
+    Parameters
+    ----------
+    X : pandas.DataFrame
+        Features of the rows to fit on, one column per feature.
+    y : array-like
+        Their target.
+    FS : str, default "off"
+        ``"off"`` (only the two filters) or any :func:`data_prep` selector:
+        ``"clas"``, ``"reg"``, ``"rfe_clas"``, ``"rfe_reg"``, ``"enet_clas"``,
+        ``"enet_reg"``.
+    ndes : int or None
+        Features kept by ``FS`` (``None`` with an elastic net: every feature
+        it doesn't zero out).
+    vt, cor : as :func:`feature_selection_cv`.
+    enet_params : dict or None
+        The elastic net's settings, as :func:`data_prep`'s.
+    memory : str, path or joblib.Memory, optional
+        Caches the filters and the elastic net, which are slow on wide data:
+        a later call with the same rows, target and settings reads them back.
+
+    Returns
+    -------
+    list
+        The kept column names, in ``X``'s order. An elastic net that does not
+        converge raises a ConvergenceWarning.
+    """
+    import warnings
+
+    from sklearn.exceptions import ConvergenceWarning
+
+    kept, converged = _select(X, y, FS, ndes, vt, cor, enet_params, memory)
+    if converged is False:
+        warnings.warn(
+            "The elastic net did not converge; raise max_iter (or tol) in enet_params",
+            ConvergenceWarning,
+            stacklevel=2,
+        )
+    return kept
+
+
+def _select(X, y, FS, ndes, vt, cor, enet_params, memory):
+    """:func:`select_features`: ``(kept columns, converged)``, ``converged`` None without an elastic net."""
+    X = pd.DataFrame(X)
+    y = np.asarray(y)
+    columns = _cached(memory, _filter_columns)(X, vt, cor)
+    X = X[columns]
+    if FS == "off":
+        return list(columns), None
+    if FS in ("enet_clas", "enet_reg"):
+        enet, converged = _cached(memory, _fit_elastic_net)(X, y, FS[5:], enet_params)
+        mask = SelectFromModel(enet, prefit=True, threshold=_NONZERO, max_features=ndes).get_support()
+        return list(X.columns[mask]), converged
+    return list(X.columns[_fit_selector(X, y, FS, ndes).get_support()]), None
+
+
+_CV_FS = ("off", "clas", "rfe_clas", "enet_clas")
 
 
 def _class_scores(truth, pred, positive) -> dict:
@@ -446,6 +583,38 @@ def _class_scores(truth, pred, positive) -> dict:
     }
 
 
+def _positive_scores(fitted, X, positive):
+    """A fitted classifier's score for the positive class (its probability, else its decision function), or None."""
+    if hasattr(fitted, "predict_proba"):
+        return fitted.predict_proba(X)[:, list(fitted.classes_).index(positive)]
+    if hasattr(fitted, "decision_function"):
+        scores = np.asarray(fitted.decision_function(X), dtype=float)
+        return scores if fitted.classes_[-1] == positive else -scores
+    return None
+
+
+def _pr_auc(truth, scores, positive) -> float:
+    """Area under the precision-recall curve (average precision); NaN without scores or positives."""
+    from sklearn.metrics import average_precision_score
+
+    truth = np.asarray(truth) == positive
+    if scores is None or not truth.any():
+        return np.nan
+    return float(average_precision_score(truth, scores))
+
+
+def _mean(values) -> float:
+    """Mean of the values that are not NaN; NaN when none is."""
+    values = np.asarray(values, dtype=float)
+    return float(values[~np.isnan(values)].mean()) if (~np.isnan(values)).any() else np.nan
+
+
+def _scores(fitted, X, y, positive) -> dict:
+    """Every classification metric of a fitted classifier on ``(X, y)``, PR-AUC included."""
+    return {**_class_scores(y, fitted.predict(X), positive),
+            "PR_AUC": _pr_auc(y, _positive_scores(fitted, X, positive), positive)}
+
+
 def feature_selection_cv(
     X,
     y,
@@ -457,6 +626,8 @@ def feature_selection_cv(
     n_repeats: int = 1,
     rs: int | None = None,
     return_folds: bool = False,
+    enet_params: dict | None = None,
+    memory=None,
 ):
     """Cross-validate feature-selection settings, refitting the selection inside every fold.
 
@@ -484,10 +655,14 @@ def feature_selection_cv(
         ``"clas"`` (SelectKBest F-test), ``"rfe_clas"`` (RFE with a logistic
         regression) or ``"enet_clas"`` (elastic-net logistic regression),
         keeping (up to) ``ndes`` features; ``ndes=None`` with ``"enet_clas"``
-        keeps every feature the elastic net doesn't zero out.
-    model : unfitted classifier, optional
+        keeps every feature the elastic net doesn't zero out. ``("off",
+        None)`` is no selection: every feature the two filters leave.
+    model : unfitted classifier, or dict of them, optional
         Cloned for every fold and configuration. Defaults to
-        ``ComplementNB()``.
+        ``ComplementNB()``. A dict ``{label: classifier}`` compares several
+        models, or one model's hyperparameter settings, on the same folds:
+        each fold's filters and selections are fitted once and shared by
+        every model, and the output gains a ``model`` column (the label).
     vt : float, default 0.0
         Variance threshold, as ``data_prep``'s ``vt``.
     cor : float or None, default 0.9
@@ -502,20 +677,35 @@ def feature_selection_cv(
         Also return every fold's scores, on its held-out rows and on its own
         training rows -- what :func:`best_without_overfitting` needs to
         judge overfitting.
+    enet_params : dict or None
+        The elastic net's settings, as :func:`data_prep`'s. It is fitted
+        once per fold; each ``("enet_clas", ndes)`` keeps the ``ndes``
+        largest of its non-zero coefficients, so a large ``ndes`` needs a
+        penalty weak enough (large ``C``) to leave that many non-zero.
+    memory : str, path or joblib.Memory, optional
+        Caches each fold's filters and elastic net: a later call on the same
+        rows with the same settings (another model, say) reads them back
+        instead of refitting.
 
     Returns
     -------
     pandas.DataFrame, or (pandas.DataFrame, pandas.DataFrame) with ``return_folds``
-        One row per configuration, in the given order: ``FS``, ``ndes``,
-        ``n_features`` (features kept, averaged over folds), and from the
-        pooled out-of-fold predictions of each repeat, averaged over the
-        repeats: ``F2`` (recall weighted twice as much as precision), ``MCC``,
-        ``recall``, ``specificity``, ``precision`` and ``accuracy``. With
-        ``return_folds``, also one row per configuration and fold: ``FS``,
-        ``ndes``, ``repeat``, ``fold`` (numbered across repeats),
-        ``n_features``, the same metrics on the fold's held-out rows, and
-        each again on the fold's training rows (``F2_train``,
-        ``MCC_train``, ...).
+        One row per configuration (per model and configuration with a dict
+        of models), in the given order: ``model`` (with a dict), ``FS``,
+        ``ndes``, ``n_features`` (features kept, averaged over folds), and
+        from the pooled out-of-fold predictions of each repeat, averaged over
+        the repeats: ``F2`` (recall weighted twice as much as precision),
+        ``MCC``, ``recall``, ``specificity``, ``precision`` and
+        ``accuracy``; ``PR_AUC``, the area under the precision-recall curve
+        of the model's probability (or decision function) for the positive
+        class, averaged over the folds (NaN for a model with neither); and,
+        when an elastic net is among the configurations, ``unconverged``:
+        the folds in which it did not converge (NaN on other rows). With
+        ``return_folds``, also one row per configuration and fold:
+        ``model`` (with a dict), ``FS``, ``ndes``, ``repeat``, ``fold``
+        (numbered across repeats), ``n_features``, the same metrics on the
+        fold's held-out rows, and each again on the fold's training rows
+        (``F2_train``, ``MCC_train``, ...).
     """
     from sklearn.base import clone
     from sklearn.model_selection import RepeatedStratifiedKFold
@@ -525,51 +715,158 @@ def feature_selection_cv(
     unknown = sorted({fs for fs, _ in configs} - set(_CV_FS))
     if unknown:
         raise ValueError(f"FS must be one of {_CV_FS}, got {unknown}")
-    model = ComplementNB() if model is None else model
+    labelled = isinstance(model, dict)
+    models = model if labelled else {None: ComplementNB() if model is None else model}
     X = pd.DataFrame(X).reset_index(drop=True)
     y = np.asarray(y)
     positive = np.unique(y)[-1]
+    filter_columns = _cached(memory, _filter_columns)
+    fit_enet = _cached(memory, _fit_elastic_net)
 
     folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=rs)
-    predicted = {c: np.empty((n_repeats, len(y)), dtype=y.dtype) for c in configs}
+    keys = [(label, fs, ndes) for label in models for fs, ndes in configs]
+    predicted = {k: np.empty((n_repeats, len(y)), dtype=y.dtype) for k in keys}
+    pr_auc = {k: [] for k in keys}
     kept = {c: [] for c in configs}
+    unconverged = 0
     fold_rows = []
     for i, (train, held_out) in enumerate(folds.split(X, y)):
         X_train, X_held, y_train = X.iloc[train], X.iloc[held_out], y[train]
-        columns = X_train.columns[VarianceThreshold(vt).fit(X_train).get_support()]
+        columns = filter_columns(X_train, vt, cor)
         X_train, X_held = X_train[columns], X_held[columns]
-        if cor is not None:
-            dropped = find_correlation(X_train, cor)
-            X_train, X_held = X_train.drop(columns=dropped), X_held.drop(columns=dropped)
         enet = None  # one elastic-net fit per fold serves every enet setting
         for fs, ndes in configs:
-            if fs == "enet_clas":
-                enet = enet if enet is not None else _elastic_net("clas").fit(X_train, y_train)
+            if fs == "off":
+                mask = np.ones(len(columns), dtype=bool)
+            elif fs == "enet_clas":
+                if enet is None:
+                    enet, converged = fit_enet(X_train, y_train, "clas", enet_params)
+                    unconverged += not converged
                 mask = SelectFromModel(
                     enet, prefit=True, threshold=_NONZERO, max_features=ndes
                 ).get_support()
             else:
                 mask = _fit_selector(X_train, y_train, fs, ndes).get_support()
-            fitted = clone(model).fit(X_train.loc[:, mask], y_train)
-            held_pred = fitted.predict(X_held.loc[:, mask])
-            predicted[fs, ndes][i // n_splits, held_out] = held_pred
             kept[fs, ndes].append(int(mask.sum()))
-            if return_folds:
-                train_scores = _class_scores(y_train, fitted.predict(X_train.loc[:, mask]), positive)
-                fold_rows.append({
-                    "FS": fs, "ndes": ndes, "repeat": i // n_splits, "fold": i,
-                    "n_features": int(mask.sum()),
-                    **_class_scores(y[held_out], held_pred, positive),
-                    **{f"{k}_train": v for k, v in train_scores.items()},
-                })
+            for label, estimator in models.items():
+                fitted = clone(estimator).fit(X_train.loc[:, mask], y_train)
+                held = _scores(fitted, X_held.loc[:, mask], y[held_out], positive)
+                predicted[label, fs, ndes][i // n_splits, held_out] = fitted.predict(X_held.loc[:, mask])
+                pr_auc[label, fs, ndes].append(held["PR_AUC"])
+                if return_folds:
+                    train_scores = _scores(fitted, X_train.loc[:, mask], y_train, positive)
+                    fold_rows.append({
+                        **({"model": label} if labelled else {}),
+                        "FS": fs, "ndes": ndes, "repeat": i // n_splits, "fold": i,
+                        "n_features": int(mask.sum()),
+                        **held,
+                        **{f"{k}_train": v for k, v in train_scores.items()},
+                    })
 
+    has_enet = any(fs == "enet_clas" for fs, _ in configs)
     rows = []
-    for fs, ndes in configs:
-        per_repeat = pd.DataFrame([_class_scores(y, p, positive) for p in predicted[fs, ndes]])
-        rows.append({"FS": fs, "ndes": ndes, "n_features": float(np.mean(kept[fs, ndes])),
-                     **per_repeat.mean().to_dict()})
+    for label, fs, ndes in keys:
+        per_repeat = pd.DataFrame([_class_scores(y, p, positive) for p in predicted[label, fs, ndes]])
+        rows.append({**({"model": label} if labelled else {}),
+                     "FS": fs, "ndes": ndes, "n_features": float(np.mean(kept[fs, ndes])),
+                     **per_repeat.mean().to_dict(), "PR_AUC": _mean(pr_auc[label, fs, ndes]),
+                     **({"unconverged": unconverged if fs == "enet_clas" else np.nan} if has_enet else {})})
     table = pd.DataFrame(rows)
     return (table, pd.DataFrame(fold_rows)) if return_folds else table
+
+
+def resplit_evaluation(
+    X,
+    y,
+    model,
+    FS: str = "off",
+    ndes=None,
+    n_resplits: int = 100,
+    test_size: float = 0.2,
+    vt: float = 0.0,
+    cor: float | None = 0.9,
+    enet_params: dict | None = None,
+    rs: int | None = None,
+    shuffle_labels: bool = False,
+    importance: bool = True,
+    memory=None,
+):
+    """Score one recipe -- the filters, a feature selection and a classifier -- on repeated random splits.
+
+    One held-out test set with few positives measures a classifier only
+    roughly, and a second recipe on the same split cannot be told apart from
+    it unless they differ a lot. Here the whole recipe is refitted on each
+    of ``n_resplits`` stratified random training sets (the filters and the
+    selection too, as :func:`select_features`) and scored on the matching
+    test set. The same ``X``, ``y`` and ``rs`` give the same resplits, so
+    two recipes can be compared resplit by resplit with
+    :func:`corrected_resampled_ttest` (``n_splits = round(1 / test_size)``
+    gives its n_test / n_train).
+
+    Parameters
+    ----------
+    X : pandas.DataFrame
+        Features of every row, one column per feature.
+    y : array-like of two classes
+        Their classes; the positive class is the larger label.
+    model : unfitted classifier
+        Cloned for every resplit.
+    FS, ndes, vt, cor, enet_params, memory
+        The selection, as :func:`select_features`. ``memory`` lets
+        recipes that share the resplits and the selection settings (other
+        classifiers, or other ``ndes`` with an elastic net) reuse its fits.
+    n_resplits : int, default 100
+    test_size : float, default 0.2
+    rs : int or None
+        Seeds the resplits (and the label shuffles).
+    shuffle_labels : bool, default False
+        Train on randomly permuted training labels and score on the true
+        test labels: the chance-level baseline of y-randomization.
+    importance : bool, default True
+        Also return each resplit's native importance of the features it
+        kept (:func:`mlmolprop.importance.variable_importance`).
+
+    Returns
+    -------
+    (pandas.DataFrame, pandas.DataFrame or None)
+        One row per resplit: ``resplit``, ``n_features``, the metrics of
+        :func:`feature_selection_cv` on its test rows (``F2``, ``MCC``,
+        ``recall``, ``specificity``, ``precision``, ``accuracy``,
+        ``PR_AUC``) and on its training rows (``F2_train``, ...), and, for
+        an elastic net, ``converged``. Then, with ``importance``, one row per
+        resplit and one column per feature of ``X``: the importance of each
+        feature that resplit kept, NaN for the others (else None).
+    """
+    from sklearn.base import clone
+    from sklearn.model_selection import StratifiedShuffleSplit
+
+    from .importance import variable_importance
+
+    X = pd.DataFrame(X).reset_index(drop=True)
+    y = np.asarray(y)
+    positive = np.unique(y)[-1]
+    shuffler = np.random.default_rng(rs)
+    splits = StratifiedShuffleSplit(n_splits=n_resplits, test_size=test_size, random_state=rs)
+    rows, importances = [], []
+    for i, (train, test) in enumerate(splits.split(X, y)):
+        y_train = shuffler.permutation(y[train]) if shuffle_labels else y[train]
+        kept, converged = _select(X.iloc[train], y_train, FS, ndes, vt, cor, enet_params, memory)
+        fitted = clone(model).fit(X.iloc[train][kept], y_train)
+        rows.append({
+            "resplit": i, "n_features": len(kept),
+            **_scores(fitted, X.iloc[test][kept], y[test], positive),
+            **{f"{k}_train": v for k, v in _scores(fitted, X.iloc[train][kept], y_train, positive).items()},
+            **({"converged": converged} if converged is not None else {}),
+        })
+        if importance:
+            values = variable_importance(fitted, kept)["importance"]
+            importances.append(values.reindex(X.columns).rename(i))
+    scores = pd.DataFrame(rows)
+    if not importance:
+        return scores, None
+    table = pd.DataFrame(importances)
+    table.index.name = "resplit"
+    return scores, table
 
 
 def corrected_resampled_ttest(a, b=None, n_splits: int = 5, alternative: str = "two-sided"):
@@ -616,19 +913,181 @@ def corrected_resampled_ttest(a, b=None, n_splits: int = 5, alternative: str = "
     return t, float(min(p, 1.0))
 
 
+def paired_comparison(
+    scores, reference=None, n_splits: int = 5, alpha: float = 0.05, margin: float | None = None
+) -> pd.DataFrame:
+    """Compare models scored on the same folds or resplits, each against one reference.
+
+    Every difference is tested with :func:`corrected_resampled_ttest`, and
+    its confidence interval is widened the same way, so overlapping training
+    sets are not counted as independent evidence.
+
+    Parameters
+    ----------
+    scores : pandas.DataFrame
+        One row per fold or resplit, one column per model, the same splits
+        in the same order for every model.
+    reference : str, optional
+        The column every model is compared with. Defaults to the one with
+        the highest mean.
+    n_splits : int, default 5
+        As :func:`corrected_resampled_ttest`: 5 for 5-fold cross-validation,
+        or for 80:20 resplits.
+    alpha : float, default 0.05
+        Level of the two-sided test; the interval of the difference has
+        confidence 1 - alpha.
+    margin : float, optional
+        An equivalence margin. With it, a difference whose (1 - 2 alpha)
+        interval lies within +-margin is equivalent (two one-sided tests),
+        and each model gets a verdict.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per model, highest mean first: ``mean``, ``std``,
+        ``difference`` (model minus reference, averaged over the splits),
+        ``low`` and ``high`` (its corrected interval) and ``p`` (two-sided;
+        NaN for the reference). With ``margin``, also ``equivalent`` and
+        ``verdict``: "reference", "better" or "worse" (significant),
+        "better (equiv.)" or "worse (equiv.)" (significant, but within the
+        margin), "equivalent" (not significant, within the margin) or
+        "inconclusive" (neither).
+    """
+    from scipy import stats
+
+    scores = pd.DataFrame(scores).astype(float)
+    reference = scores.mean().idxmax() if reference is None else reference
+    n = len(scores)
+    if n < 2:
+        raise ValueError("Need the scores of at least two splits")
+    inflate = 1 / n + 1 / (n_splits - 1)
+    rows = []
+    for model in scores.columns:
+        d = scores[model] - scores[reference]
+        se = float(np.sqrt(inflate * d.var(ddof=1)))
+        half = stats.t(n - 1).ppf(1 - alpha / 2) * se
+        row = {"model": model, "mean": scores[model].mean(), "std": scores[model].std(ddof=1),
+               "difference": d.mean(), "low": d.mean() - half, "high": d.mean() + half,
+               "p": np.nan if model == reference else corrected_resampled_ttest(d, n_splits=n_splits)[1]}
+        if margin is not None:
+            narrow = stats.t(n - 1).ppf(1 - alpha) * se
+            equivalent = bool(-margin < d.mean() - narrow and d.mean() + narrow < margin)
+            significant = model != reference and row["p"] < alpha
+            if model == reference:
+                verdict = "reference"
+            elif significant:
+                verdict = ("better" if d.mean() > 0 else "worse") + (" (equiv.)" if equivalent else "")
+            else:
+                verdict = "equivalent" if equivalent else "inconclusive"
+            row.update(equivalent=equivalent, verdict=verdict)
+        rows.append(row)
+    table = pd.DataFrame(rows).set_index("model")
+    return table.sort_values("mean", ascending=False, kind="stable")
+
+
+def holdout_scores(
+    truth, predicted, scores=None, n_boot: int = 2000, confidence: float = 0.95, rs: int | None = None
+) -> pd.DataFrame:
+    """A classifier's metrics on one held-out set, with confidence intervals.
+
+    A test set with few positives measures recall and precision roughly; the
+    intervals say how roughly. Recall, specificity, precision and accuracy
+    are proportions and get the exact (Clopper-Pearson) binomial interval.
+    F2, MCC and PR-AUC get the percentile interval of a stratified bootstrap:
+    positives and negatives are resampled separately, so every resample keeps
+    the test set's class counts.
+
+    Parameters
+    ----------
+    truth, predicted : array-like
+        True and predicted classes; the positive class is the larger label of
+        ``truth``.
+    scores : array-like, optional
+        The model's score for the positive class (probability or decision
+        function), for PR-AUC.
+    n_boot : int, default 2000
+    confidence : float, default 0.95
+    rs : int or None
+        Seeds the bootstrap.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per metric (``F2``, ``MCC``, ``recall``, ``specificity``,
+        ``precision``, ``accuracy``, and ``PR_AUC`` with ``scores``):
+        ``value``, ``low``, ``high``, ``interval`` ("exact" or "bootstrap")
+        and ``count`` (e.g. "12/15" for a proportion).
+    """
+    from scipy.stats import beta
+
+    truth, predicted = np.asarray(truth), np.asarray(predicted)
+    positive = np.unique(truth)[-1]
+    actual, called = truth == positive, predicted == positive
+    tail = (1 - confidence) / 2
+
+    def exact(k, n):
+        low = beta.ppf(tail, k, n - k + 1) if k > 0 else 0.0
+        high = beta.ppf(1 - tail, k + 1, n - k) if k < n else 1.0
+        return float(low), float(high)
+
+    def f2_mcc(a, c):
+        tp, fn = np.sum(a & c), np.sum(a & ~c)
+        fp, tn = np.sum(~a & c), np.sum(~a & ~c)
+        f2 = 5 * tp / (5 * tp + 4 * fn + fp) if tp + fn + fp else 0.0
+        denominator = np.sqrt(float(tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+        return f2, (tp * tn - fp * fn) / denominator if denominator else 0.0
+
+    tp, fn = int(np.sum(actual & called)), int(np.sum(actual & ~called))
+    fp, tn = int(np.sum(~actual & called)), int(np.sum(~actual & ~called))
+    proportions = {"recall": (tp, tp + fn), "specificity": (tn, tn + fp),
+                   "precision": (tp, tp + fp), "accuracy": (tp + tn, len(truth))}
+
+    rng = np.random.default_rng(rs)
+    pos, neg = np.flatnonzero(actual), np.flatnonzero(~actual)
+    boot = []
+    for _ in range(n_boot):
+        idx = np.concatenate([rng.choice(pos, len(pos)), rng.choice(neg, len(neg))])
+        row = dict(zip(("F2", "MCC"), f2_mcc(actual[idx], called[idx]), strict=True))
+        if scores is not None:
+            row["PR_AUC"] = _pr_auc(actual[idx], np.asarray(scores)[idx], True)
+        boot.append(row)
+    boot = pd.DataFrame(boot)
+
+    values = dict(zip(("F2", "MCC"), f2_mcc(actual, called), strict=True))
+    if scores is not None:
+        values["PR_AUC"] = _pr_auc(actual, scores, True)
+    rows = []
+    for metric in ("F2", "MCC"):
+        rows.append({"metric": metric, "value": values[metric], "low": boot[metric].quantile(tail),
+                     "high": boot[metric].quantile(1 - tail), "interval": "bootstrap", "count": ""})
+    for metric, (k, n) in proportions.items():
+        rows.append({"metric": metric, "value": k / n if n else 0.0, **dict(zip(("low", "high"), exact(k, n),
+                     strict=True)), "interval": "exact", "count": f"{k}/{n}"})
+    if scores is not None:
+        rows.append({"metric": "PR_AUC", "value": values["PR_AUC"], "low": boot["PR_AUC"].quantile(tail),
+                     "high": boot["PR_AUC"].quantile(1 - tail), "interval": "bootstrap", "count": ""})
+    return pd.DataFrame(rows).set_index("metric")
+
+
 def _setting_key(frame: pd.DataFrame) -> pd.Series:
-    """One label per (FS, ndes), with ndes=None/NaN as "all"."""
+    """One label per (model, FS, ndes), with ndes=None/NaN as "all"; no model column is one model."""
     ndes = frame["ndes"].map(lambda n: "all" if pd.isna(n) else str(int(n)))
-    return frame["FS"].astype(str) + " " + ndes
+    key = frame["FS"].astype(str) + " " + ndes
+    return frame["model"].astype(str) + " | " + key if "model" in frame.columns else key
 
 
 def best_without_overfitting(
-    table: pd.DataFrame, folds: pd.DataFrame, metric: str = "MCC", alpha: float = 0.05
+    table: pd.DataFrame,
+    folds: pd.DataFrame,
+    metric: str = "MCC",
+    alpha: float = 0.05,
+    n_splits: int | None = None,
 ) -> pd.DataFrame:
     """Choose a feature-selection setting: the best cross-validated score that does not overfit.
 
     Takes :func:`feature_selection_cv`'s ``table`` and ``folds``
-    (``return_folds=True``). A setting's overfitting is its gap: ``metric``
+    (``return_folds=True``); with a dict of models, every model and setting
+    is a candidate of its own. A setting's overfitting is its gap: ``metric``
     on each fold's own training rows minus on its held-out rows, averaged
     over the folds. Every model fits its training rows better than unseen
     ones, so the gaps are compared, not tested against zero:
@@ -654,6 +1113,11 @@ def best_without_overfitting(
         Any of its metrics: ``"MCC"``, ``"F2"``, ``"recall"``, ...
     alpha : float, default 0.05
         Significance level of both one-sided tests.
+    n_splits : int, optional
+        For :func:`corrected_resampled_ttest`; defaults to the folds per
+        repeat in ``folds``. Pass 5 for scores from 80:20 resplits (e.g.
+        :func:`resplit_evaluation`'s, with each resplit as a ``fold`` and
+        ``repeat`` set to 0).
 
     Returns
     -------
@@ -666,7 +1130,8 @@ def best_without_overfitting(
         exactly one row.
     """
     folds = folds.assign(setting=_setting_key(folds), gap=folds[f"{metric}_train"] - folds[metric])
-    n_splits = int(folds.groupby("repeat")["fold"].nunique().max())
+    if n_splits is None:
+        n_splits = int(folds.groupby("repeat")["fold"].nunique().max())
     held = folds.pivot(index="fold", columns="setting", values=metric)
     gaps = folds.pivot(index="fold", columns="setting", values="gap")
 
