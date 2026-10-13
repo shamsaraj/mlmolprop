@@ -13,6 +13,7 @@ from rdkit.Chem import Descriptors
 from rdkit.Chem.AllChem import GetErGFingerprint, GetMorganFingerprintAsBitVect
 from rdkit.Chem.EState.Fingerprinter import FingerprintMol
 from rdkit.Chem.Fingerprints import FingerprintMols
+from rdkit.Chem.MolStandardize import rdMolStandardize
 from rdkit.Chem.rdMolDescriptors import (
     GetHashedAtomPairFingerprintAsBitVect,
     GetHashedTopologicalTorsionFingerprintAsBitVect,
@@ -25,6 +26,39 @@ RDLogger.DisableLog("rdApp.*")
 warnings.filterwarnings("ignore")
 
 _VALID_TYPES = {"ecfp4", "maccs", "all"}
+
+
+def neutralize(mol):
+    """Return the molecule's neutral form, for fingerprints that do not depend on how it was drawn.
+
+    RDKit's standard clean-up (``rdMolStandardize.Cleanup``: explicit
+    hydrogens removed, metals disconnected, functional groups drawn one way,
+    e.g. nitro as ``[N+](=O)[O-]``) followed by ``rdMolStandardize.Uncharger``,
+    which adds or removes protons to neutralise every charge that has a
+    neutral form: carboxylates become acids, ammonium ions amines, phenolates
+    phenols. Charges with no neutral form stay (quaternary ammonium, nitro,
+    N-oxides, pyridinium). Tautomers are left as drawn. Heavy atoms keep
+    their order and coordinates (only hydrogens change), so a 2D layout
+    still draws the same way.
+
+    Parameters
+    ----------
+    mol : rdkit.Chem.Mol
+        The molecule; it is not modified.
+
+    Returns
+    -------
+    rdkit.Chem.Mol
+        A new molecule, with the input's properties (e.g. ``_Name``).
+    """
+    neutral = rdMolStandardize.Uncharger().uncharge(rdMolStandardize.Cleanup(mol))
+    for key, value in mol.GetPropsAsDict(includePrivate=True, includeComputed=False).items():
+        if not neutral.HasProp(key):
+            neutral.SetProp(key, str(value))
+    return neutral
+
+
+_neutralize = neutralize
 
 
 def explicit_bitvect_to_numpy_array(
@@ -123,6 +157,7 @@ def make_fingerprints(
     verbose: bool = False,
     type_f: str = "ECFP4",
     radius: int = 2,
+    neutralize: bool = False,
 ) -> tuple[pd.DataFrame, dict]:
     """Compute one or more fingerprint types for a list of RDKit molecules.
 
@@ -142,6 +177,10 @@ def make_fingerprints(
         ``"all"`` (case-insensitive).
     radius : int, default 2
         Morgan fingerprint radius, used only when ``type_f="ECFP4"``.
+    neutralize : bool, default False
+        Fingerprint each molecule's neutral form (see :func:`neutralize`),
+        so that a carboxylic acid drawn as the acid or as the carboxylate
+        sets the same bits. The input molecules are not modified.
 
     Returns
     -------
@@ -153,6 +192,8 @@ def make_fingerprints(
     """
     bit_info: dict = {}
     fp_list = _build_fp_list(type_f, length, radius, bit_info)
+    if neutralize:
+        data = [_neutralize(mol) for mol in data]
 
     for fp in fp_list:
         if verbose:

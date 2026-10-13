@@ -19,7 +19,7 @@ This toolkit integrates **RDKit**, **scikit-learn**, **Keras/PyTorch**, **LIME**
 | **basic.py** | Core statistics helpers for QSAR model evaluation (PRESS, R², Q², RMSE, F-statistic, etc.). |
 | **correlation.py** | Detects and removes highly correlated features from datasets. |
 | **processing.py** | Dataset preprocessing — imputation, scaling, normalization, feature selection, correlation filtering, and train/test splitting. |
-| **fingerprint.py** | Generates molecular fingerprints (ECFP, MACCS, Avalon, RDKit, etc.) using RDKit. |
+| **fingerprint.py** | Generates molecular fingerprints (ECFP, MACCS, Avalon, RDKit, etc.) using RDKit; `neutralize` (also `make_fingerprints(neutralize=True)`) fingerprints each molecule's neutral form. |
 | **descriptors.py** | Computes molecular descriptors, merges with activity data, and exports QSAR-ready datasets. |
 | **molprep.py** | Prepares molecular structures (SDF/SMILES): salt removal, 3D embedding, charge calculation, and image generation. |
 | **model.py** | Fits and evaluates regression/classification models (PLS, Random Forest, SVM, MLP, a small Keras deep-learning classifier, etc.). |

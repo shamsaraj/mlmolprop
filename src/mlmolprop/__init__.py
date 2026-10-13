@@ -16,7 +16,7 @@ from .basic import (
 )
 from .correlation import find_correlation
 from .descriptors import CI, dataframe, desc, tanimoto
-from .fingerprint import Fingerprint, explicit_bitvect_to_numpy_array, make_fingerprints
+from .fingerprint import Fingerprint, explicit_bitvect_to_numpy_array, make_fingerprints, neutralize
 from .image import highlight, images_to_dataframe, svg_files_to_png
 from .importance import (
     bootstrap_importance,
@@ -107,6 +107,7 @@ __all__ = [
     "mol_enumerate",
     "mol_prep",
     "moltosvg",
+    "neutralize",
     "object2file",
     "paired_comparison",
     "partial",

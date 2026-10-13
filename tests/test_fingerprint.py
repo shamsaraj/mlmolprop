@@ -1,8 +1,12 @@
 """Tests for mlmolprop.fingerprint."""
 
 import numpy as np
+import pandas as pd
 import pytest
+from rdkit import Chem
+from rdkit.Chem import AllChem
 
+from mlmolprop import neutralize
 from mlmolprop.fingerprint import Fingerprint, _build_fp_list, make_fingerprints
 
 
@@ -82,3 +86,50 @@ def test_fingerprint_class_apply_fp(small_molecules):
     fp.apply_fp(small_molecules)
     assert len(fp.x) == len(small_molecules)
     assert all(arr.shape == (32,) for arr in fp.x)
+
+
+@pytest.mark.parametrize(
+    "drawn, neutral",
+    [
+        ("CC(=O)[O-]", "CC(=O)O"),  # carboxylate -> acid
+        ("CC[NH3+]", "CCN"),  # ammonium -> amine
+        ("[O-]c1ccccc1", "Oc1ccccc1"),  # phenolate -> phenol
+        ("[NH3+]CC(=O)[O-]", "NCC(=O)O"),  # zwitterion -> neutral
+        ("C[N+](C)(C)C", "C[N+](C)(C)C"),  # quaternary ammonium has no neutral form
+        ("O=[N+]([O-])c1ccccc1", "O=[N+]([O-])c1ccccc1"),  # nitro stays charge-separated
+        ("CCO", "CCO"),  # already neutral
+    ],
+)
+def test_neutralize_gives_the_neutral_form_where_one_exists(drawn, neutral):
+    out = neutralize(Chem.MolFromSmiles(drawn))
+    assert Chem.MolToSmiles(out) == Chem.MolToSmiles(Chem.MolFromSmiles(neutral))
+
+
+def test_neutralize_keeps_input_name_and_2d_layout():
+    mol = Chem.MolFromSmiles("OC(=O)c1ccccc1C(=O)[O-]")
+    mol.SetProp("_Name", "phthalate")
+    AllChem.Compute2DCoords(mol)
+    before = Chem.MolToSmiles(mol)
+    coords = mol.GetConformer().GetPositions()
+
+    out = neutralize(mol)
+
+    assert Chem.MolToSmiles(mol) == before  # the input is not modified
+    assert out.GetProp("_Name") == "phthalate"
+    assert [a.GetSymbol() for a in out.GetAtoms()] == [a.GetSymbol() for a in mol.GetAtoms()]
+    np.testing.assert_allclose(out.GetConformer().GetPositions(), coords)
+
+
+def test_make_fingerprints_neutralize_matches_fingerprints_of_the_neutral_forms():
+    drawn = [Chem.MolFromSmiles(s) for s in ("CC(=O)[O-]", "CC[NH3+]", "c1ccccc1")]
+    neutral = [Chem.MolFromSmiles(s) for s in ("CC(=O)O", "CCN", "c1ccccc1")]
+    names = [["a", "b", "c"]]
+    before = [Chem.MolToSmiles(m) for m in drawn]
+
+    as_drawn, _ = make_fingerprints(drawn, names, length=256)
+    neutralized, _ = make_fingerprints(drawn, names, length=256, neutralize=True)
+    expected, _ = make_fingerprints(neutral, names, length=256)
+
+    pd.testing.assert_frame_equal(neutralized, expected)
+    assert not as_drawn.equals(neutralized)  # the default fingerprints the molecules as drawn
+    assert [Chem.MolToSmiles(m) for m in drawn] == before  # the inputs are not modified
