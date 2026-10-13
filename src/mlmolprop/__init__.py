@@ -60,6 +60,7 @@ from .processing import (
     object2file,
     paired_comparison,
     resplit_evaluation,
+    select_by_one_se,
     select_features,
 )
 
@@ -120,6 +121,7 @@ __all__ = [
     "resplit_evaluation",
     "rocc",
     "safe_divide",
+    "select_by_one_se",
     "select_features",
     "selection_stability",
     "significance_importance",

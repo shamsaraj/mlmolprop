@@ -20,6 +20,7 @@ from mlmolprop.processing import (
     paired_comparison,
     resplit_evaluation,
     scaffold_split,
+    select_by_one_se,
     select_features,
 )
 
@@ -879,6 +880,33 @@ def test_best_without_overfitting_max_gap_chooses_nothing_when_nothing_qualifies
     report = best_without_overfitting(table, folds, max_gap=0.2)
     assert not report["chosen"].any() and not report["within_max_gap"].any()
     assert len(report) == 2
+
+
+def test_select_by_one_se_takes_the_simplest_setting_within_one_se(rng):
+    table, folds = _synthetic_cv(rng, {("clas", 800): (0.500, 0.10), ("clas", 400): (0.497, 0.10),
+                                       ("clas", 100): (0.400, 0.05)})
+    report = select_by_one_se(table, folds, [("ndes", True)], metric="MCC").set_index("ndes")
+    se = report.loc[800, "se"]
+    assert 0 < se < 0.05 and report.attrs["threshold"] == pytest.approx(report.loc[800, "MCC"] - se)
+    assert report.loc[400, "in_window"] and not report.loc[100, "in_window"]
+    assert report.loc[400, "chosen"] and report["chosen"].sum() == 1  # not the best, 800
+
+
+def test_select_by_one_se_limits_and_order(rng):
+    settings = {("clas", 800): (0.500, 0.10), ("clas", 400): (0.497, 0.30), ("clas", 200): (0.496, 0.10)}
+    table, folds = _synthetic_cv(rng, settings)
+    # 400 overtrains by 0.30 / 0.80 of its training score: the limit leaves it out, 200 is next simplest
+    limited = select_by_one_se(table, folds, ["ndes"], metric="MCC", max_gap=0.2).set_index("ndes")
+    assert not limited.loc[400, "within_max_gap"] and limited.loc[200, "chosen"]
+    # a floor above every score: nothing is eligible
+    none = select_by_one_se(table, folds, ["ndes"], metric="MCC", floor=0.9)
+    assert not none["eligible"].any() and not none["chosen"].any() and np.isnan(none.attrs["threshold"])
+    # larger is simpler, and ties in simplicity go to the higher score
+    table["alpha"] = [1.0, 10.0, 10.0]  # 800, 400, 200
+    report = select_by_one_se(table, folds, [("alpha", False)], metric="MCC").set_index("ndes")
+    simplest = report[report["alpha"] == 10]
+    assert simplest["in_window"].all()
+    assert report["chosen"].idxmax() == simplest["MCC"].idxmax()  # of the two alpha-10 settings, the higher score
 
 
 def test_best_without_overfitting_on_feature_selection_cv(rng):

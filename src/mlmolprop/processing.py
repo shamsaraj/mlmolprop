@@ -1182,6 +1182,97 @@ def best_without_overfitting(
     return out.drop(columns="setting")
 
 
+def select_by_one_se(
+    table: pd.DataFrame,
+    folds: pd.DataFrame,
+    simplicity,
+    metric: str = "F2",
+    max_gap: float | None = None,
+    floor: float | None = None,
+) -> pd.DataFrame:
+    """Choose the simplest setting whose cross-validated score is within one standard error of the best.
+
+    The one-standard-error rule (Breiman et al., 1984; Hastie, Tibshirani and
+    Friedman, 2009, section 7.10): the best cross-validated score is the
+    maximum of many noisy estimates and flatters its setting, so any setting
+    within one standard error of it is about as good, and the simplest of
+    them is preferred. Steps:
+
+    1. eligible: the settings whose ``metric`` is above ``floor`` and whose
+       gap (``metric`` on the folds' own training rows minus on their
+       held-out rows) is at most ``max_gap`` of the training score, for the
+       limits given;
+    2. the best: the eligible setting with the highest ``metric``;
+    3. the window: the eligible settings whose ``metric`` is at least the
+       best's minus its standard error (the standard deviation of its
+       per-fold ``metric`` over the square root of the number of folds);
+    4. chosen: the simplest setting in the window by ``simplicity``, ties
+       going to the higher ``metric``.
+
+    Parameters
+    ----------
+    table, folds : pandas.DataFrame
+        :func:`feature_selection_cv` with ``return_folds=True`` (a dict of
+        models or not); ``table`` may carry extra columns, e.g. each model's
+        hyperparameters, for ``simplicity``.
+    simplicity : list of str or (str, bool)
+        Columns of ``table`` that order the settings from simplest, each with
+        whether smaller values are simpler (a bare name means they are):
+        ``[("ndes", True), ("C", True)]`` prefers fewer features, then a
+        stronger penalty; ``("min_samples_leaf", False)`` prefers larger
+        leaves.
+    metric : str, default "F2"
+        Any metric of :func:`feature_selection_cv`.
+    max_gap : float, optional
+        The largest gap allowed, as a share of the training score.
+    floor : float, optional
+        The score a setting must exceed, e.g. that of a trivial classifier.
+
+    Returns
+    -------
+    pandas.DataFrame
+        ``table`` sorted by ``metric``, best first, with ``<metric>_train``
+        (mean over the folds), ``gap``, ``gap_share`` (the gap over the
+        training score), ``se``, ``above_floor`` and ``within_max_gap`` (for
+        the limits given), ``eligible``, ``in_window`` and ``chosen``, True
+        on one row, or on none when no setting is eligible.
+        ``attrs["threshold"]`` is the window's lower bound.
+    """
+    folds = folds.assign(setting=_setting_key(folds))
+    by = folds.groupby("setting")
+    out = table.assign(setting=_setting_key(table))
+    train = out["setting"].map(by[f"{metric}_train"].mean())
+    out[f"{metric}_train"] = train
+    out["gap"] = train - out["setting"].map(by[metric].mean())
+    out["gap_share"] = (out["gap"] / train).where(train > 0)
+    out["se"] = out["setting"].map(by[metric].std(ddof=1) / np.sqrt(by[metric].count()))
+    eligible = pd.Series(True, index=out.index)
+    if floor is not None:
+        out["above_floor"] = out[metric] > floor
+        eligible &= out["above_floor"]
+    if max_gap is not None:
+        out["within_max_gap"] = out["gap_share"] <= max_gap
+        eligible &= out["within_max_gap"]
+    out["eligible"] = eligible
+    out = out.sort_values(metric, ascending=False, kind="stable")
+    out["in_window"] = False
+    out["chosen"] = False
+    out.attrs["threshold"] = np.nan
+    if not out["eligible"].any():
+        return out.drop(columns="setting")
+
+    best = out[out["eligible"]].iloc[0]
+    threshold = best[metric] - best["se"]
+    out["in_window"] = out["eligible"] & (out[metric] >= threshold)
+    order = [(c, True) if isinstance(c, str) else (c[0], bool(c[1])) for c in simplicity]
+    window = out[out["in_window"]].sort_values(
+        [c for c, _ in order] + [metric], ascending=[a for _, a in order] + [False], kind="stable"
+    )
+    out.loc[window.index[0], "chosen"] = True
+    out.attrs["threshold"] = float(threshold)
+    return out.drop(columns="setting")
+
+
 def scaffold_split(names, smiles, test_size: float = 0.2, rs: int | None = None):
     """Train/test split grouped by Bemis-Murcko scaffold, not by row.
 
