@@ -499,6 +499,7 @@ def select_features(
     cor: float | None = 0.9,
     enet_params: dict | None = None,
     memory=None,
+    model=None,
 ) -> list:
     """Fit the variance filter, the correlation filter and a feature selection; the columns they keep.
 
@@ -514,9 +515,13 @@ def select_features(
     y : array-like
         Their target.
     FS : str, default "off"
-        ``"off"`` (only the two filters) or any :func:`data_prep` selector:
+        ``"off"`` (only the two filters), any :func:`data_prep` selector:
         ``"clas"``, ``"reg"``, ``"rfe_clas"``, ``"rfe_reg"``, ``"enet_clas"``,
-        ``"enet_reg"``.
+        ``"enet_reg"``, or ``"model"``: ``model`` itself, fitted on every
+        feature the filters leave, keeps the ``ndes`` it relies on most
+        (absolute coefficient; Naive Bayes: absolute log-odds from its
+        :func:`~mlmolprop.importance.neutral_point`; trees: impurity
+        importance; ties keep the earlier feature).
     ndes : int or None
         Features kept by ``FS`` (``None`` with an elastic net: every feature
         it doesn't zero out).
@@ -526,6 +531,8 @@ def select_features(
     memory : str, path or joblib.Memory, optional
         Caches the filters and the elastic net, which are slow on wide data:
         a later call with the same rows, target and settings reads them back.
+    model : unfitted estimator, optional
+        The model whose own weights select the features, for ``FS="model"``.
 
     Returns
     -------
@@ -537,7 +544,7 @@ def select_features(
 
     from sklearn.exceptions import ConvergenceWarning
 
-    kept, converged = _select(X, y, FS, ndes, vt, cor, enet_params, memory)
+    kept, converged = _select(X, y, FS, ndes, vt, cor, enet_params, memory, model=model)
     if converged is False:
         warnings.warn(
             "The elastic net did not converge; raise max_iter (or tol) in enet_params",
@@ -547,14 +554,46 @@ def select_features(
     return kept
 
 
-def _select(X, y, FS, ndes, vt, cor, enet_params, memory):
+def _own_weights(fitted) -> np.ndarray:
+    """How much a fitted model relies on each of its features: the size of its native importance.
+
+    Linear models: the absolute coefficient; Naive Bayes: the absolute
+    log-odds measured from :func:`~mlmolprop.importance.neutral_point`;
+    trees and forests: the impurity importance.
+    """
+    from .importance import _native_values, neutral_point
+
+    native = _native_values(fitted)
+    if native is None:
+        raise ValueError(f"{type(fitted).__name__} exposes no coefficients, log-odds or feature importances "
+                         'to select by (FS="model")')
+    values, signed = native
+    values = np.asarray(values, dtype=float)
+    return np.abs(values - neutral_point(fitted)) if signed else values
+
+
+def _top_mask(weights, ndes) -> np.ndarray:
+    """The ``ndes`` largest weights (ties: the earlier feature first), as a boolean mask."""
+    weights = np.asarray(weights, dtype=float)
+    mask = np.zeros(len(weights), dtype=bool)
+    mask[np.argsort(-weights, kind="stable")[: len(weights) if ndes is None else ndes]] = True
+    return mask
+
+
+def _select(X, y, FS, ndes, vt, cor, enet_params, memory, model=None):
     """:func:`select_features`: ``(kept columns, converged)``, ``converged`` None without an elastic net."""
+    from sklearn.base import clone
+
     X = pd.DataFrame(X)
     y = np.asarray(y)
     columns = _cached(memory, _filter_columns)(X, vt, cor)
     X = X[columns]
     if FS == "off":
         return list(columns), None
+    if FS == "model":
+        if model is None:
+            raise ValueError('FS="model" selects by the model\'s own weights: give the model')
+        return list(X.columns[_top_mask(_own_weights(clone(model).fit(X, y)), ndes)]), None
     if FS in ("enet_clas", "enet_reg"):
         enet, converged = _cached(memory, _fit_elastic_net)(X, y, FS[5:], enet_params)
         mask = SelectFromModel(enet, prefit=True, threshold=_NONZERO, max_features=ndes).get_support()
@@ -562,7 +601,7 @@ def _select(X, y, FS, ndes, vt, cor, enet_params, memory):
     return list(X.columns[_fit_selector(X, y, FS, ndes).get_support()]), None
 
 
-_CV_FS = ("off", "clas", "rfe_clas", "enet_clas")
+_CV_FS = ("off", "clas", "rfe_clas", "enet_clas", "model")
 
 
 def _class_scores(truth, pred, positive) -> dict:
@@ -657,6 +696,11 @@ def feature_selection_cv(
         keeping (up to) ``ndes`` features; ``ndes=None`` with ``"enet_clas"``
         keeps every feature the elastic net doesn't zero out. ``("off",
         None)`` is no selection: every feature the two filters leave.
+        ``("model", ndes)`` lets each model choose its own features: fitted
+        on every feature the filters leave, it keeps the ``ndes`` it relies
+        on most (as :func:`select_features` with ``FS="model"``), and a fresh
+        copy is trained on them; with a dict of models each one selects for
+        itself, once per fold.
     model : unfitted classifier, or dict of them, optional
         Cloned for every fold and configuration. Defaults to
         ``ComplementNB()``. A dict ``{label: classifier}`` compares several
@@ -735,6 +779,7 @@ def feature_selection_cv(
         columns = filter_columns(X_train, vt, cor)
         X_train, X_held = X_train[columns], X_held[columns]
         enet = None  # one elastic-net fit per fold serves every enet setting
+        own = {}  # FS="model": each model's weights on every filtered feature, one fit per fold
         for fs, ndes in configs:
             if fs == "off":
                 mask = np.ones(len(columns), dtype=bool)
@@ -745,10 +790,18 @@ def feature_selection_cv(
                 mask = SelectFromModel(
                     enet, prefit=True, threshold=_NONZERO, max_features=ndes
                 ).get_support()
+            elif fs == "model":
+                for label, estimator in models.items():
+                    if label not in own:
+                        own[label] = _own_weights(clone(estimator).fit(X_train, y_train))
+                masks = {label: _top_mask(own[label], ndes) for label in models}
+                mask = next(iter(masks.values()))
             else:
                 mask = _fit_selector(X_train, y_train, fs, ndes).get_support()
             kept[fs, ndes].append(int(mask.sum()))
             for label, estimator in models.items():
+                if fs == "model":
+                    mask = masks[label]
                 fitted = clone(estimator).fit(X_train.loc[:, mask], y_train)
                 held = _scores(fitted, X_held.loc[:, mask], y[held_out], positive)
                 predicted[label, fs, ndes][i // n_splits, held_out] = fitted.predict(X_held.loc[:, mask])
@@ -812,7 +865,8 @@ def resplit_evaluation(
     model : unfitted classifier
         Cloned for every resplit.
     FS, ndes, vt, cor, enet_params, memory
-        The selection, as :func:`select_features`. ``memory`` lets
+        The selection, as :func:`select_features` (``FS="model"``: ``model``
+        selects its own features on each training set). ``memory`` lets
         recipes that share the resplits and the selection settings (other
         classifiers, or other ``ndes`` with an elastic net) reuse its fits.
     n_resplits : int, default 100
@@ -850,7 +904,7 @@ def resplit_evaluation(
     rows, importances = [], []
     for i, (train, test) in enumerate(splits.split(X, y)):
         y_train = shuffler.permutation(y[train]) if shuffle_labels else y[train]
-        kept, converged = _select(X.iloc[train], y_train, FS, ndes, vt, cor, enet_params, memory)
+        kept, converged = _select(X.iloc[train], y_train, FS, ndes, vt, cor, enet_params, memory, model=model)
         fitted = clone(model).fit(X.iloc[train][kept], y_train)
         rows.append({
             "resplit": i, "n_features": len(kept),

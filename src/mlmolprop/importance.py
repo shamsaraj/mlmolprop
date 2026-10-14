@@ -325,6 +325,42 @@ def _importance_table(values, names, method, signed, extra=None) -> pd.DataFrame
     return table
 
 
+def neutral_point(model) -> float:
+    """The importance a fitted model gives a feature equally common in both classes.
+
+    For a ComplementNB or MultinomialNB it is not 0: each class's
+    feature log-probabilities are relative to all the feature counts of that
+    class (plus the smoothing), so a feature carried by the same share of
+    both classes' rows gets the log-odds
+    ``log((n1 / T1) / (n0 / T0))``, with ``n`` a class's row count
+    (``class_count_``) and ``T`` its feature counts plus ``alpha`` per
+    feature. A class whose rows carry more features pulls that point
+    negative. For every other model (BernoulliNB, whose per-class
+    probabilities are shares of the class's rows, linear models, trees) it
+    is 0.
+
+    Parameters
+    ----------
+    model : fitted estimator
+
+    Returns
+    -------
+    float
+        The point that :func:`variable_importance`'s native values of
+        ``model`` are best read against: above it a feature leans to class 1,
+        below it to class 0.
+    """
+    from sklearn.naive_bayes import ComplementNB, MultinomialNB
+
+    if isinstance(model, (ComplementNB, MultinomialNB)):
+        counts = np.asarray(model.class_count_, dtype=float)
+        totals = model.feature_count_.sum(axis=1) + model.alpha * model.feature_count_.shape[1]
+        if len(counts) != 2:
+            raise ValueError("neutral_point covers binary classification")
+        return float(np.log((counts[1] / totals[1]) / (counts[0] / totals[0])))
+    return 0.0
+
+
 def _native_values(model):
     """``(values, signed)`` for what a fitted model exposes about itself, or None."""
     coef = _linear_coefficients(model)

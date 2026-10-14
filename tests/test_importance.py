@@ -33,6 +33,7 @@ from mlmolprop.importance import (
     consensus_features,
     enrichment_importance,
     lime_explain,
+    neutral_point,
     partial,
     significance_importance,
     stable_features,
@@ -849,3 +850,31 @@ def test_selection_stability_counts_unkept_features_as_zero(rng):
     assert features.loc["always", "stability"] > features.loc["half", "stability"]
     with pytest.raises(ValueError):
         selection_stability(refits.head(1))
+
+
+def test_neutral_point_is_the_log_odds_of_a_feature_equally_common_in_both_classes(rng):
+    from sklearn.naive_bayes import ComplementNB
+
+    # class 1 rows carry more features, so its log-probabilities are spread thinner;
+    # "even" is set in exactly half the rows of each class
+    n0, n1 = 120, 40
+    y = np.r_[np.zeros(n0, int), np.ones(n1, int)]
+    X = pd.DataFrame({
+        "even": np.r_[np.tile([1, 0], n0 // 2), np.tile([1, 0], n1 // 2)],
+        "busy0": np.r_[rng.random(n0) < 0.2, rng.random(n1) < 0.9].astype(int),
+        "busy1": np.r_[rng.random(n0) < 0.2, rng.random(n1) < 0.9].astype(int),
+    })
+    model = ComplementNB(alpha=1e-10).fit(X, y)
+    log_odds = variable_importance(model, list(X.columns))["importance"]
+    assert neutral_point(model) == pytest.approx(log_odds["even"], abs=1e-6)
+    assert neutral_point(model) < 0  # the busier class 1 pulls it below zero
+
+
+def test_neutral_point_is_zero_for_models_without_a_shifted_scale(bits_xy):
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.naive_bayes import BernoulliNB
+    from sklearn.tree import DecisionTreeClassifier
+
+    X, y = bits_xy
+    for model in (BernoulliNB(), LogisticRegression(), DecisionTreeClassifier(random_state=0)):
+        assert neutral_point(model.fit(X, y)) == 0.0

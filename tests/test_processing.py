@@ -1151,3 +1151,59 @@ def test_scaffold_split_invalid_smiles_does_not_raise():
     smiles = ["c1ccccc1C(=O)O", "c1ccccc1CCN", "not-a-smiles"]
     train_names, test_names = scaffold_split(names, smiles, test_size=0.34, rs=0)
     assert set(train_names) | set(test_names) == set(names)
+
+
+def _own_top(model, X, y, k, neutral=False):
+    """The k columns a fitted model weighs most, computed directly."""
+    from mlmolprop.importance import neutral_point, variable_importance
+
+    fitted = model.fit(X, y)
+    values = variable_importance(fitted, list(X.columns))["importance"].reindex(X.columns)
+    weights = (values - neutral_point(fitted)).abs() if neutral else values.abs()
+    order = np.argsort(-weights.to_numpy(), kind="stable")[:k]
+    return [X.columns[i] for i in sorted(order)]
+
+
+def test_select_features_model_keeps_what_the_model_itself_weighs_most(rng):
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.naive_bayes import ComplementNB
+
+    X, y = _binary_features(rng, n=200, informative=4, noise=16)
+    for model, neutral in ((LogisticRegression(C=0.5, max_iter=1000), False),
+                           (RandomForestClassifier(n_estimators=50, random_state=0), False),
+                           (ComplementNB(), True)):
+        kept = select_features(X, y, FS="model", ndes=5, cor=None, model=model)
+        assert kept == _own_top(model, X, y, 5, neutral=neutral)
+        assert {"i0", "i1", "i2", "i3"} <= set(kept)  # the informative bits are among them
+
+
+def test_select_features_model_needs_the_model(rng):
+    X, y = _binary_features(rng, n=60, informative=2, noise=4)
+    with pytest.raises(ValueError, match="give the model"):
+        select_features(X, y, FS="model", ndes=2)
+
+
+def test_feature_selection_cv_model_lets_each_model_select_for_itself(rng):
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.tree import DecisionTreeClassifier
+
+    X, y = _binary_features(rng, n=150, informative=4, noise=20)
+    models = {"lr": LogisticRegression(max_iter=1000), "tree": DecisionTreeClassifier(max_depth=3, random_state=0)}
+    both = feature_selection_cv(X, y, [("model", 6)], model=models, n_splits=3, rs=0)
+    for label, model in models.items():
+        alone = feature_selection_cv(X, y, [("model", 6)], model={label: model}, n_splits=3, rs=0)
+        pd.testing.assert_frame_equal(alone.reset_index(drop=True),
+                                      both[both["model"] == label].reset_index(drop=True))
+    assert (both["n_features"] == 6).all()
+    assert (both["MCC"] > 0.3).all()
+
+
+def test_resplit_evaluation_model_selection_keeps_ndes_features(rng):
+    from sklearn.linear_model import LogisticRegression
+
+    X, y = _binary_features(rng, n=150, informative=3, noise=15)
+    scores, importances = resplit_evaluation(X, y, LogisticRegression(max_iter=1000), FS="model", ndes=4,
+                                             n_resplits=5, rs=0)
+    assert (scores["n_features"] == 4).all()
+    assert (importances.notna().sum(axis=1) == 4).all()  # each resplit's model saw only its own 4 bits
